@@ -34,6 +34,7 @@ import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinition;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.parser.CronParser;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.pentaho.platform.api.scheduler2.wrappers.DayOfMonthWrapper;
 import org.pentaho.platform.api.scheduler2.wrappers.DayOfWeekWrapper;
 import org.pentaho.platform.api.scheduler2.wrappers.HourlyWrapper;
@@ -53,6 +54,7 @@ import org.pentaho.platform.scheduler2.recur.SequentialRecurrence;
  * @author arodriguez
  */
 @XmlRootElement
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class ComplexJobTrigger extends JobTrigger implements IComplexJobTrigger {
 
   private static final long serialVersionUID = -2742874361158319735L;
