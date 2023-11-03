@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import javax.xml.bind.annotation.XmlRootElement;
-
+import com.fasterxml.jackson.annotation.JsonSetter;
 import org.pentaho.platform.api.scheduler2.CronJobTrigger;
 import org.pentaho.platform.api.scheduler2.ICronJobTrigger;
 import org.pentaho.platform.api.scheduler2.IJobScheduleParam;
@@ -134,6 +134,7 @@ public class JobScheduleRequest implements Serializable, IJobScheduleRequest {
     return cronJobTrigger;
   }
 
+  @JsonSetter("cronJobTrigger")
   public void setCronJobTrigger( CronJobTrigger jobTrigger ) {
     if ( jobTrigger != null ) {
       setComplexJobTrigger( null );
@@ -146,6 +147,7 @@ public class JobScheduleRequest implements Serializable, IJobScheduleRequest {
     return complexJobTrigger;
   }
 
+  @JsonSetter("complexJobTrigger")
   public void setComplexJobTrigger( ComplexJobTriggerProxy jobTrigger ) {
     if ( jobTrigger != null ) {
       setCronJobTrigger( null );
@@ -158,6 +160,7 @@ public class JobScheduleRequest implements Serializable, IJobScheduleRequest {
     return simpleJobTrigger;
   }
 
+  @JsonSetter("simpleJobTrigger")
   public void setSimpleJobTrigger( SimpleJobTrigger jobTrigger ) {
     if ( jobTrigger != null ) {
       setCronJobTrigger( null );
@@ -224,11 +227,11 @@ public class JobScheduleRequest implements Serializable, IJobScheduleRequest {
   }
 
   @Override public void setSimpleJobTrigger( ISimpleJobTrigger jobTrigger ) {
-    simpleJobTrigger = (SimpleJobTrigger) jobTrigger;
+    setSimpleJobTrigger( ( SimpleJobTrigger ) jobTrigger );
   }
 
   @Override public void setCronJobTrigger( ICronJobTrigger cron ) {
-    cronJobTrigger = (CronJobTrigger) cron;
+    setCronJobTrigger( ( CronJobTrigger ) cron );
   }
 
   public String getJobId() {
