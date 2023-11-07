@@ -23,6 +23,9 @@ package org.pentaho.mantle.client.external.services;
 import com.google.gwt.core.client.JsArray;
 import com.google.gwt.event.dom.client.ChangeEvent;
 import com.google.gwt.event.dom.client.ChangeHandler;
+import com.google.gwt.json.client.JSONObject;
+import com.google.gwt.json.client.JSONString;
+import com.google.gwt.json.client.JSONValue;
 import com.google.gwt.user.client.ui.DockPanel;
 import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.gwt.user.client.ui.TextBox;
@@ -63,13 +66,8 @@ public class ContentCleanerPanelUtils implements IContentCleanerPanelUtils {
     scheduleTextBox.addChangeHandler( new ChangeHandler() {
       public void onChange( ChangeEvent event ) {
         if ( jsJob != null ) {
-          JsArray<JsJobParam> params = jsJob.getJobParams();
-          for ( int i = 0; i < params.length(); i++ ) {
-            if ( params.get( i ).getName().equals( "age" ) ) {
-              params.get( i ).setValue( String.valueOf( Long.parseLong( scheduleTextBox.getText() ) * DAY_IN_MILLIS ) );
-              break;
-            }
-          }
+          JSONObject jparams = jsJob.getJobParams();
+          jparams.put("age", new JSONString( String.valueOf( Long.parseLong( scheduleTextBox.getText() ) * DAY_IN_MILLIS ) ) );
         }
       }
     } );

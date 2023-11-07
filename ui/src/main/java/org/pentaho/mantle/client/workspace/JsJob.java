@@ -21,6 +21,9 @@ import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.core.client.JsArray;
 import com.google.gwt.i18n.client.DateTimeFormat;
 import com.google.gwt.i18n.client.DateTimeFormat.PredefinedFormat;
+import com.google.gwt.json.client.JSONObject;
+import com.google.gwt.json.client.JSONString;
+import com.google.gwt.json.client.JSONValue;
 
 import java.util.Date;
 
@@ -41,7 +44,7 @@ public class JsJob extends JavaScriptObject {
 
   private final native String getNativeLastRun() /*-{ return this.lastRun; }-*/; //
 
-  public final native JsArray<JsJobParam> getJobParams() /*-{ return this.jobParams.jobParams; }-*/; //
+  public final native JSONObject getJobParams() /*-{ return this.jobParams; }-*/; //
 
   public final native JsJobTrigger getJobTrigger() /*-{ return this.jobTrigger; }-*/; //
 
@@ -50,32 +53,21 @@ public class JsJob extends JavaScriptObject {
   public final native void setState( String newState ) /*-{ this.state = newState; }-*/; //
 
   public final String getJobParamValue( String name ) {
-    if ( hasJobParams() ) {
-      JsArray<JsJobParam> params = getJobParams();
-      for ( int i = 0; i < params.length(); i++ ) {
-        JsJobParam param = params.get( i );
-        if ( param.getName().equals( name ) ) {
-          return param.getValue();
-        }
-      }
+    JSONObject jobParams = getJobParams();
+    if ( jobParams.containsKey( name ) ) {
+      return jobParams.get( name ).toString();
     }
     return null;
   }
 
-  public final JsJobParam getJobParam( String name ) {
-    if ( hasJobParams() ) {
-      JsArray<JsJobParam> params = getJobParams();
-      for ( int i = 0; i < params.length(); i++ ) {
-        JsJobParam param = params.get( i );
-        if ( param.getName().equals( name ) ) {
-          return param;
-        }
-      }
+  public final JSONObject getJobParam(String name ) {
+    JSONObject jobParams = getJobParams();
+    if ( jobParams.containsKey( name  ) ) {
+      return jobParams.get( name ).isObject();
     }
     return null;
   }
 
-  private final native boolean hasJobParams() /*-{ return this.jobParams != null; }-*/; //
 
   public final boolean hasResourceName() {
     String resource = getJobParamValue( "ActionAdapterQuartzJob-StreamProvider" );
@@ -104,10 +96,8 @@ public class JsJob extends JavaScriptObject {
   }
 
   public final void setOutputPath( String outputPath, String outputFileName ) {
-    JsJobParam resource = getJobParam( "ActionAdapterQuartzJob-StreamProvider" );
-    // input file = /public/Inventory.prpt:outputFile = /public/TEST.*
-    resource.setValue( "input file = " + getFullResourceName() + ":outputFile = " + outputPath + "/" + outputFileName
-        + ".*" );
+    getJobParams().put("ActionAdapterQuartzJob-StreamProvider", new JSONString("input file = " + getFullResourceName() + ":outputFile = " + outputPath + "/" + outputFileName
+            + ".*" ));
   }
 
   public final String getShortResourceName() {

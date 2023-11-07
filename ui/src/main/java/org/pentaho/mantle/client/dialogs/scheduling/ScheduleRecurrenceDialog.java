@@ -305,17 +305,9 @@ public class ScheduleRecurrenceDialog extends AbstractWizardDialog {
           }
         }
       }
-
-      for ( int i = 0; i < jsJob.getJobParams().length(); i++ ) {
-        JsJobParam param = jsJob.getJobParams().get( i );
-        if ( param.getName().equals( "runSafeMode" ) ) {
-          scheduleEditor.setEnableSafeMode( Boolean.valueOf( param.getValue() ) );
-        } else if ( param.getName().equals( "gatheringMetrics" ) ) {
-          scheduleEditor.setGatherMetrics( Boolean.valueOf( param.getValue() ) );
-        } else if ( param.getName().equals( "logLevel" ) ) {
-          scheduleEditor.setLogLevel( param.getValue() );
-        }
-      }
+      scheduleEditor.setEnableSafeMode( Boolean.valueOf( jsJob.getJobParams().get("runSafeMode" ).toString() ) );
+      scheduleEditor.setGatherMetrics( Boolean.valueOf( jsJob.getJobParams().get("gatheringMetrics" ).toString() ) );
+      scheduleEditor.setLogLevel( jsJob.getJobParams().get("logLevel" ).toString() );
 
       scheduleEditor.setStartDate( jsJobTrigger.getStartTime() );
       scheduleEditor.setStartTime( DateTimeFormat.getFormat( HOUR_MINUTE_SECOND ).format(
@@ -911,16 +903,16 @@ public class ScheduleRecurrenceDialog extends AbstractWizardDialog {
 
       if ( editJob != null ) {
         JSONArray scheduleParams = new JSONArray();
-
-        for ( int i = 0; i < editJob.getJobParams().length(); i++ ) {
-          JsJobParam param = editJob.getJobParams().get( i );
+        JSONObject jobParams = editJob.getJobParams();
+        int count = 0;
+        for ( String key : jobParams.keySet() ) {
           JsArrayString paramValue = (JsArrayString) JavaScriptObject.createArray().cast();
-          paramValue.push( param.getValue() );
+          paramValue.push( jobParams.get( key ).toString() );
           JsSchedulingParameter p = (JsSchedulingParameter) JavaScriptObject.createObject().cast();
-          p.setName( param.getName() );
+          p.setName( key );
           p.setType( "string" ); //$NON-NLS-1$
           p.setStringValue( paramValue );
-          scheduleParams.set( i, new JSONObject( p ) );
+          scheduleParams.set( count++, new JSONObject( p ) );
         }
 
         scheduleRequest.put( "jobParameters", scheduleParams ); //$NON-NLS-1$

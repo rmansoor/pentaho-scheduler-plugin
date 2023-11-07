@@ -489,7 +489,7 @@ public class SchedulesPanel extends SimplePanel {
             return BLANK_VALUE;
           }
 
-          DateTimeFormat format = DateTimeFormat.getFormat( PredefinedFormat.DATE_TIME_MEDIUM );
+          DateTimeFormat format = DateTimeFormat.getFormat( "EEE MMM dd HH:mm:ss zzz yyyy" );
           return format.format( date );
         } catch ( Throwable t ) {
           return BLANK_VALUE;
@@ -1224,13 +1224,7 @@ public class SchedulesPanel extends SimplePanel {
   }
 
   private native JsArray<JsJob> parseJson( String json ) /*-{
-    var obj = JSON.parse(json);
-
-    if (obj != null && obj.hasOwnProperty("job")) {
-      return obj.job;
-    }
-
-    return [];
+    return JSON.parse(json);
   }-*/;
 
   private native JsJob parseJsonJob( String json ) /*-{

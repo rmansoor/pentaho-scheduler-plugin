@@ -19,6 +19,9 @@ package org.pentaho.mantle.client.dialogs.scheduling;
 
 import java.util.Date;
 
+import com.google.gwt.json.client.JSONObject;
+import com.google.gwt.json.client.JSONString;
+import com.google.gwt.json.client.JSONValue;
 import org.pentaho.gwt.widgets.client.dialogs.IDialogCallback;
 import org.pentaho.gwt.widgets.client.dialogs.MessageDialogBox;
 import org.pentaho.gwt.widgets.client.dialogs.PromptDialogBox;
@@ -359,40 +362,15 @@ public class NewScheduleDialog extends PromptDialogBox {
             if ( jsJob != null ) {
               jsJob.setJobName( scheduleNameTextBox.getText() );
               jsJob.setOutputPath( scheduleLocationTextBox.getText(), scheduleNameTextBox.getText() );
-
-              if ( jsJob.getJobParamValue( "appendDateFormat" ) != null ) {
-                if ( dateFormat != null ) {
-                  JsJobParam jp = jsJob.getJobParam( "appendDateFormat" );
-                  jp.setValue( dateFormat );
-                } else {
-                  for ( int j = 0; j < jsJob.getJobParams().length(); j++ ) {
-                    JsJobParam jjp = jsJob.getJobParams().get( j );
-                    if ( "appendDateFormat".equals( jjp.getName() ) ) {
-                      delete( jsJob.getJobParams(), j, 1 );
-                    }
-                  }
-                }
+              if ( dateFormat != null ) {
+                jsJob.getJobParams().put("appendDateFormat", new JSONString( dateFormat));
               } else {
-                if ( dateFormat != null ) {
-                  JsJobParam jjp = (JsJobParam) JavaScriptObject.createObject().cast();
-                  jjp.setName( "appendDateFormat" );
-                  jjp.setValue( dateFormat );
-                  jsJob.getJobParams().set( jsJob.getJobParams().length(), jjp );
-                }
+                jsJob.getJobParams().put("appendDateFormat", null);
               }
 
-              if ( jsJob.getJobParamValue( "autoCreateUniqueFilename" ) != null ) {
-                if ( !jsJob.getJobParamValue( "autoCreateUniqueFilename" ).equals( String.valueOf( !overwriteFile ) ) ) {
-                  JsJobParam jp = jsJob.getJobParam( "autoCreateUniqueFilename" );
-                  jp.setValue( String.valueOf( !overwriteFile ) );
-                }
-              } else {
-                JsJobParam jjp = (JsJobParam) JavaScriptObject.createObject().cast();
-                jjp.setName( "autoCreateUniqueFilename" );
-                jjp.setValue( String.valueOf( !overwriteFile ) );
-                jsJob.getJobParams().set( jsJob.getJobParams().length(), jjp );
+              if ( !jsJob.getJobParamValue( "autoCreateUniqueFilename" ).equals( String.valueOf( !overwriteFile ) ) ) {
+                  jsJob.getJobParams().put("autoCreateUniqueFilename", new JSONString( String.valueOf( !overwriteFile )));
               }
-
 
               if ( recurrenceDialog == null ) {
                 recurrenceDialog =

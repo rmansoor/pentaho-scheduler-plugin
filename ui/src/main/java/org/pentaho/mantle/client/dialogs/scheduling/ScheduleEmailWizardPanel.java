@@ -200,19 +200,20 @@ public class ScheduleEmailWizardPanel extends AbstractWizardPanel {
     emailSchedulePanel.setWidget( 8, 0, messageTextArea );
 
     if ( job != null ) {
-      JsArray<JsJobParam> jparams = job.getJobParams();
-      for ( int i = 0; i < jparams.length(); i++ ) {
-        if ( "_SCH_EMAIL_TO".equals( jparams.get( i ).getName() ) ) {
+      JSONObject jparams = job.getJobParams();
+      for ( String parameterName : jparams.keySet() ) {
+        String parameterValue = jparams.get( parameterName ).toString();
+        if ( "_SCH_EMAIL_TO".equals( parameterName ) ) {
           yes.setValue( true );
           no.setValue( false );
           emailSchedulePanel.setVisible( true );
-          toAddressTextBox.setText( jparams.get( i ).getValue() );
-        } else if ( "_SCH_EMAIL_SUBJECT".equals( jparams.get( i ).getName() ) ) {
-          subjectTextBox.setText( jparams.get( i ).getValue() );
-        } else if ( "_SCH_EMAIL_MESSAGE".equals( jparams.get( i ).getName() ) ) {
-          messageTextArea.setText( jparams.get( i ).getValue() );
-        } else if ( "_SCH_EMAIL_ATTACHMENT_NAME".equals( jparams.get( i ).getName() ) ) {
-          attachmentNameTextBox.setText( jparams.get( i ).getValue() );
+          toAddressTextBox.setText( parameterValue );
+        } else if ( "_SCH_EMAIL_SUBJECT".equals( parameterName ) ) {
+          subjectTextBox.setText( parameterValue );
+        } else if ( "_SCH_EMAIL_MESSAGE".equals( parameterName ) ) {
+          messageTextArea.setText( parameterValue );
+        } else if ( "_SCH_EMAIL_ATTACHMENT_NAME".equals( parameterName ) ) {
+          attachmentNameTextBox.setText( parameterValue );
         }
       }
     }

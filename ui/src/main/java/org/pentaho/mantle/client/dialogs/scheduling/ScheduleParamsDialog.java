@@ -119,10 +119,12 @@ public class ScheduleParamsDialog extends AbstractWizardDialog {
     String urlParams = "";
     if ( editJob != null ) {
       // add all edit params to URL
-      JsArray<JsJobParam> jparams = editJob.getJobParams();
-      for ( int i = 0; i < jparams.length(); i++ ) {
-        urlParams += i == 0 ? "?" : "&";
-        urlParams += jparams.get( i ).getName() + "=" + URL.encodeQueryString( jparams.get( i ).getValue().trim() );
+      JSONObject jparams = editJob.getJobParams();
+      boolean notFirst = false;
+      for (  String key: jparams.keySet() ) {
+        urlParams += !( notFirst ) ? "?" : "&";
+        notFirst = true;
+        urlParams += key + "=" + URL.encodeQueryString( jparams.get( key ).toString().trim() );
       }
     }
     setParametersUrl( EnvironmentHelper.getFullyQualifiedURL() + "api/repos/" + urlPath + "/parameterUi" + urlParams ); //$NON-NLS-1$ //$NON-NLS-2$
