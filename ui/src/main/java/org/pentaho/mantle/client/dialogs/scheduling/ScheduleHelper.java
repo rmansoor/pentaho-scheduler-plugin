@@ -61,6 +61,10 @@ public class ScheduleHelper {
       @org.pentaho.mantle.client.dialogs.scheduling.ScheduleHelper::createSchedule(Ljava/lang/String;Ljava/lang/String;)(repositoryFileId, repositoryFilePath);
     }
 
+    $wnd.pho.createSchedule = function(repositoryFileId, repositoryFilePath, repositoryFileTitle) {
+      //CHECKSTYLE IGNORE LineLength FOR NEXT 1 LINES
+      @org.pentaho.mantle.client.dialogs.scheduling.ScheduleHelper::createRunInBackground(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)(repositoryFileId, repositoryFilePath, repositoryFileTitle);    }
+
     $wnd.pho.getSchedulerPluginContextURL = function() {
       //CHECKSTYLE IGNORE LineLength FOR NEXT 1 LINES
       return @org.pentaho.mantle.client.dialogs.scheduling.ScheduleHelper::getPluginContextURL()();
@@ -136,6 +140,7 @@ public class ScheduleHelper {
       EventBusUtil.EVENT_BUS.fireEvent( event );
     }
   }
+
 
   public static void createSchedule( final RepositoryFile repositoryFile ) {
     createSchedule( repositoryFile.getId(), repositoryFile.getPath() );
