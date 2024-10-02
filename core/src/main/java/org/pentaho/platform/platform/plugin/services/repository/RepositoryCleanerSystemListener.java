@@ -24,12 +24,15 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.pentaho.platform.api.engine.IPentahoSession;
 import org.pentaho.platform.api.engine.IPentahoSystemListener;
+import org.pentaho.platform.api.engine.IPluginLifecycleListener;
+import org.pentaho.platform.api.engine.PluginLifecycleException;
 import org.pentaho.platform.api.scheduler2.IComplexJobTrigger;
 import org.pentaho.platform.api.scheduler2.IJob;
 import org.pentaho.platform.api.scheduler2.IJobFilter;
 import org.pentaho.platform.api.scheduler2.IJobTrigger;
 import org.pentaho.platform.api.scheduler2.IScheduler;
 import org.pentaho.platform.api.scheduler2.SchedulerException;
+import org.pentaho.platform.engine.core.system.PentahoSessionHolder;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.util.StringUtil;
 
@@ -59,9 +62,24 @@ import java.util.List;
  *
  * @author Andrey Khayrutdinov
  */
-public class RepositoryCleanerSystemListener implements IPentahoSystemListener, IJobFilter {
+public class RepositoryCleanerSystemListener implements IPluginLifecycleListener, IJobFilter {
 
   private final Log logger = LogFactory.getLog( RepositoryCleanerSystemListener.class );
+
+  @Override
+  public void init() throws PluginLifecycleException {
+    this.startup(PentahoSessionHolder.getSession());
+  }
+
+  @Override
+  public void loaded() throws PluginLifecycleException {
+
+  }
+
+  @Override
+  public void unLoaded() throws PluginLifecycleException {
+    this.shutdown();
+  }
 
   public enum Frequency {
     NOW( "now" ) {
@@ -114,7 +132,6 @@ public class RepositoryCleanerSystemListener implements IPentahoSystemListener, 
   private boolean gcEnabled = true;
   private String execute;
 
-  @Override
   public boolean startup( IPentahoSession session ) {
     IScheduler scheduler = PentahoSystem.get( IScheduler.class, "IScheduler2", session );
     if ( scheduler == null ) {
@@ -196,7 +213,6 @@ public class RepositoryCleanerSystemListener implements IPentahoSystemListener, 
   }
 
 
-  @Override
   public void shutdown() {
     // nothing to do
   }

@@ -3,7 +3,12 @@
 
   <lifecycle-listener class="org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener"/>
   <lifecycle-listener class="org.pentaho.platform.scheduler2.versionchecker.EmbeddedVersionCheckSystemListener"/>
-
+  <lifecycle-listener class="org.pentaho.platform.platform.plugin.services.repository.RepositoryCleanerSystemListener">
+  <properties>
+    <property name="a" value="1"/>
+    <property name="b" value="2"/>
+  </properties>
+  </lifecycle-listener>
   <perspective id="schedules.perspective" title="${schedules}" layout-priority="10"
                resourcebundle="content/scheduler-plugin/resources/messages/messages">
   </perspective>
