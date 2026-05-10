@@ -7,7 +7,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file.
  *
- * Change Date: 2028-08-13
+ * Change Date: 2029-07-20
  ******************************************************************************/
 
 
@@ -26,6 +26,7 @@ import org.pentaho.platform.api.util.IPentahoPlatformExporter;
 import org.pentaho.platform.api.util.IRepositoryExportLogger;
 import org.pentaho.platform.api.repository2.unified.IUnifiedRepository;
 import org.pentaho.platform.api.repository2.unified.RepositoryFile;
+import org.pentaho.platform.api.repository2.unified.RepositoryFileAcl;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.api.importexport.ExportException;
 import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
@@ -214,6 +215,27 @@ public class ScheduleExportUtil implements IExportHelper {
       if ( exporter != null ) {
         log.debug( "Exporting schedule dependency: [ " + inputFilePath + " ] for schedule [ " + jobName + " ]" );
         exporter.exportFileByPath( inputFilePath );
+        
+        // CRITICAL FIX: Add the exported file to the manifest so import knows to import it
+        if ( exportManifest != null ) {
+          try {
+            // Get ACL for the file if available
+            RepositoryFileAcl acl = null;
+            try {
+              acl = repository.getAcl( file.getId() );
+            } catch ( Exception e ) {
+              log.debug( "Could not retrieve ACL for file [ " + inputFilePath + " ]: " + e.getMessage() );
+            }
+            
+            // Add the file to the manifest's content list
+            exportManifest.add( file, acl );
+            log.debug( "Added schedule dependency to manifest: [ " + inputFilePath + " ]" );
+          } catch ( Exception e ) {
+            log.warn( "Failed to add schedule dependency to manifest [ " + inputFilePath + " ]: " + e.getMessage() );
+            log.debug( "Error adding to manifest", e );
+          }
+        }
+        
         log.debug( "Successfully exported schedule dependency: [ " + inputFilePath + " ]" );
       } else {
         log.warn( "Exporter not available - unable to export schedule dependency [ " + inputFilePath + " ]" );
