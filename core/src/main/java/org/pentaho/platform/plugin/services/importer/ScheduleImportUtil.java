@@ -237,6 +237,11 @@ public class ScheduleImportUtil implements IImportHelper {
           PentahoSystem.get( org.pentaho.platform.api.repository2.unified.IUnifiedRepository.class );
       
       if ( repo != null ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().debug( 
+              "Checking schedule input file - Original: [ " + inputFilePath + " ] → Normalized: [ " + normalizedPath + " ]" );
+        }
+        
         RepositoryFile file = repo.getFile( normalizedPath );
         if ( file != null && !file.isFolder() ) {
           if ( solutionImportHandler.isPerformingRestore() ) {
@@ -245,7 +250,7 @@ public class ScheduleImportUtil implements IImportHelper {
           return true;
         } else {
           if ( solutionImportHandler.isPerformingRestore() ) {
-            solutionImportHandler.getLogger().debug( "✗ Schedule input file not found: [ " + normalizedPath + " ]" );
+            solutionImportHandler.getLogger().debug( "✗ Schedule input file not found in repository: [ " + normalizedPath + " ]" );
           }
           return false;
         }
@@ -254,7 +259,8 @@ public class ScheduleImportUtil implements IImportHelper {
         return true; // Assume file exists if we can't check
       }
     } catch ( Exception e ) {
-      solutionImportHandler.getLogger().warn( "Error checking schedule input file [ " + inputFilePath + " ]: " + e.getMessage() );
+      solutionImportHandler.getLogger().debug( 
+          "Error checking schedule input file [ " + inputFilePath + " ] (normalized: [ " + normalizedPath + " ]): " + e.getMessage() );
       return false;
     }
   }
@@ -271,11 +277,19 @@ public class ScheduleImportUtil implements IImportHelper {
     }
     
     try {
+      // Handle URL encoding: replace + with space first (common in form encoding)
+      String processed = path.replace( "+", " " );
+      
       // URL decode: convert %XX to actual characters
-      String decoded = URLDecoder.decode( path, "UTF-8" );
+      String decoded = URLDecoder.decode( processed, "UTF-8" );
       
       // Convert backslashes to forward slashes (Windows path support)
       String normalized = decoded.replace( "\\", "/" );
+      
+      // Ensure leading slash for repository path
+      if ( !normalized.startsWith( "/" ) ) {
+        normalized = "/" + normalized;
+      }
       
       // Normalize multiple slashes to single slash
       normalized = normalized.replaceAll( "/+", "/" );
