@@ -24,6 +24,8 @@ import org.pentaho.platform.api.scheduler2.SimpleJobTrigger;
 import org.pentaho.platform.api.importexport.IExportHelper;
 import org.pentaho.platform.api.util.IPentahoPlatformExporter;
 import org.pentaho.platform.api.util.IRepositoryExportLogger;
+import org.pentaho.platform.api.repository2.unified.IUnifiedRepository;
+import org.pentaho.platform.api.repository2.unified.RepositoryFile;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.api.importexport.ExportException;
 import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
@@ -43,6 +45,7 @@ public class ScheduleExportUtil implements IExportHelper {
 
   private ExportManifest exportManifest;
   protected IRepositoryExportLogger log;
+  private IPentahoPlatformExporter exporter;
 
   public ScheduleExportUtil() {
     // to get 100% coverage
@@ -170,6 +173,62 @@ public class ScheduleExportUtil implements IExportHelper {
   private void setRepositoryExportLogger( IRepositoryExportLogger repositoryExportLogger ) {
     this.log = repositoryExportLogger;
   }
+
+  private void setExporter( IPentahoPlatformExporter platformExporter ) {
+    this.exporter = platformExporter;
+  }
+
+  /**
+   * Exports files referenced by a schedule to the export bundle.
+   * This ensures that when schedules are restored, all their dependencies are available.
+   * 
+   * @param inputFilePath the repository path of the file referenced by the schedule
+   * @param jobName the name of the schedule (for logging)
+   */
+  protected void exportScheduleReferencedFile( String inputFilePath, String jobName ) {
+    if ( inputFilePath == null || inputFilePath.trim().isEmpty() ) {
+      return; // No input file to export
+    }
+
+    try {
+      IUnifiedRepository repository = PentahoSystem.get( IUnifiedRepository.class );
+      if ( repository == null ) {
+        log.warn( "Unable to access repository to export schedule input file [ " + inputFilePath + " ]" );
+        return;
+      }
+      
+      RepositoryFile file = repository.getFile( inputFilePath );
+      
+      if ( file == null ) {
+        log.warn( "Schedule [ " + jobName + " ] references missing input file [ " + inputFilePath + " ]"
+          + " - file will need to be added manually or auto-imported during restore" );
+        return;
+      }
+      
+      if ( file.isFolder() ) {
+        log.warn( "Schedule [ " + jobName + " ] input file path [ " + inputFilePath + " ] is a folder, not a file" );
+        return;
+      }
+      
+      // Export the referenced file to the bundle
+      if ( exporter != null ) {
+        log.debug( "Exporting schedule dependency: [ " + inputFilePath + " ] for schedule [ " + jobName + " ]" );
+        exporter.exportFileByPath( inputFilePath );
+        log.debug( "Successfully exported schedule dependency: [ " + inputFilePath + " ]" );
+      } else {
+        log.warn( "Exporter not available - unable to export schedule dependency [ " + inputFilePath + " ]" );
+      }
+    } catch ( ExportException e ) {
+      // Log error but continue - schedule export should not fail if a dependency file export fails
+      log.warn( "Failed to export schedule dependency [ " + inputFilePath + " ] for schedule [ " + jobName + " ]: " + e.getMessage() );
+      log.debug( "Failed to export schedule dependency [ " + inputFilePath + " ]", e );
+    } catch ( Exception e ) {
+      // Log any other errors but continue
+      log.warn( "Error while exporting schedule input file [ " + inputFilePath + " ] for schedule [ " + jobName + " ]: " + e.getMessage() );
+      log.debug( "Error while exporting schedule input file [ " + inputFilePath + " ]", e );
+    }
+  }
+
   protected void exportSchedules() throws ExportException {
     log.info( Messages.getString( "PentahoPlatformExporter.INFO_START_EXPORT_SCHEDULE" ) );
 
@@ -197,6 +256,13 @@ public class ScheduleExportUtil implements IExportHelper {
           log.trace( " Creating a job scheduling request for [ " + job.getJobName() + " ]" );
           JobScheduleRequest scheduleRequest = ScheduleExportUtil.createJobScheduleRequest( job );
           log.trace( " Successfully finish creating a job scheduling request for [ " + job.getJobName() + " ]" );
+          
+          // EXPORT DEPENDENCIES: Export the schedule's referenced input file to the bundle
+          String inputFilePath = scheduleRequest.getInputFile();
+          if ( inputFilePath != null && !inputFilePath.trim().isEmpty() ) {
+            exportScheduleReferencedFile( inputFilePath, job.getJobName() );
+          }
+          
           exportManifest.addSchedule( scheduleRequest );
           successfulJobExportCount++;
           log.trace( " Successfully added job scheduling request to manifest [ " + job.getJobName() + " ]" );
@@ -220,6 +286,7 @@ public class ScheduleExportUtil implements IExportHelper {
     PentahoPlatformExporter exporter = (PentahoPlatformExporter) exportArg;
     exportManifest = exporter.getExportManifest();
     setRepositoryExportLogger( exporter.getRepositoryExportLogger() );
+    setExporter( exporter );
     exportSchedules();
   }
 
