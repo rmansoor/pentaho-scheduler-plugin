@@ -221,48 +221,62 @@ public class ScheduleImportUtil implements IImportHelper {
   }
 
   /**
-   * Ensure that a schedule's input file exists in the repository.
-   * This validates that all required dependencies are available before creating the schedule.
+   * Ensures that the file referenced by a schedule input path exists in the repository.
+   * Files are imported by SolutionImportHandler.importRepositoryFilesAndFolders() before
+   * this helper runs (since runImportHelpers is called after repository files are imported).
    * 
-   * @param inputFilePath The path to the schedule input file
-   * @return true if the file exists in the repository, false otherwise
+   * This method checks if the file exists, skipping the schedule if not found.
+   * 
+   * @param inputFilePath the repository path of the file referenced by the schedule
+   * @return true if the file exists, false otherwise
    */
   protected boolean ensureScheduleInputFileExists( String inputFilePath ) {
-    // Normalize the path for consistent comparison
-    String normalizedPath = normalizePath( inputFilePath );
+    if ( inputFilePath == null || inputFilePath.trim().isEmpty() ) {
+      return true; // No file reference, nothing to check
+    }
+    
+    // Normalize the path to use forward slashes
+    String normalizedPath = inputFilePath.replace( File.separator, RepositoryFile.SEPARATOR );
+    
+    // Check if the file already exists in the repository
+    org.pentaho.platform.api.repository2.unified.IUnifiedRepository repo = 
+        PentahoSystem.get( org.pentaho.platform.api.repository2.unified.IUnifiedRepository.class );
+    
+    if ( repo == null ) {
+      logger.warn( "Unable to get repository instance to validate schedule input file" );
+      return true; // Assume file exists if we can't check
+    }
+    
+    RepositoryFile existingFile = repo.getFile( normalizedPath );
+    if ( existingFile != null ) {
+      if ( solutionImportHandler.isPerformingRestore() ) {
+        solutionImportHandler.getLogger().debug( "Schedule input file [ " + normalizedPath + " ] already exists in repository" );
+      }
+      return true;
+    }
+    
+    // File doesn't exist in repository - try to import from the backup bundle
+    if ( solutionImportHandler.isPerformingRestore() ) {
+      solutionImportHandler.getLogger().debug( "Schedule input file [ " + normalizedPath + " ] not found in repository, attempting to import from backup" );
+    }
     
     try {
-      // Check if the file exists in the JCR repository
-      org.pentaho.platform.api.repository2.unified.IUnifiedRepository repo = 
-          PentahoSystem.get( org.pentaho.platform.api.repository2.unified.IUnifiedRepository.class );
-      
-      if ( repo != null ) {
+      // Call SolutionImportHandler to import the file from the backup bundle
+      if ( solutionImportHandler.importFileFromBundle( normalizedPath ) ) {
         if ( solutionImportHandler.isPerformingRestore() ) {
-          solutionImportHandler.getLogger().debug( 
-              "Checking schedule input file - Original: [ " + inputFilePath + " ] → Normalized: [ " + normalizedPath + " ]" );
+          solutionImportHandler.getLogger().debug( "Successfully imported schedule dependency file from backup: [ " + normalizedPath + " ]" );
         }
-        
-        RepositoryFile file = repo.getFile( normalizedPath );
-        if ( file != null && !file.isFolder() ) {
-          if ( solutionImportHandler.isPerformingRestore() ) {
-            solutionImportHandler.getLogger().debug( "✓ Schedule input file found: [ " + normalizedPath + " ]" );
-          }
-          return true;
-        } else {
-          if ( solutionImportHandler.isPerformingRestore() ) {
-            solutionImportHandler.getLogger().debug( "✗ Schedule input file not found in repository: [ " + normalizedPath + " ]" );
-          }
-          return false;
-        }
-      } else {
-        solutionImportHandler.getLogger().warn( "Unable to get repository instance to validate schedule input file" );
-        return true; // Assume file exists if we can't check
+        return true;
       }
     } catch ( Exception e ) {
-      solutionImportHandler.getLogger().debug( 
-          "Error checking schedule input file [ " + inputFilePath + " ] (normalized: [ " + normalizedPath + " ]): " + e.getMessage() );
-      return false;
+      logger.warn( "Error importing schedule dependency file [ " + normalizedPath + " ]: " + e.getMessage() );
     }
+    
+    // File could not be imported
+    if ( solutionImportHandler.isPerformingRestore() ) {
+      solutionImportHandler.getLogger().warn( "Schedule input file [ " + normalizedPath + " ] not found in backup and could not be imported" );
+    }
+    return false;
   }
 
   /**
