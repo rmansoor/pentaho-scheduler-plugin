@@ -13,20 +13,38 @@ import org.pentaho.platform.api.scheduler2.ISchedulerResource;
 import org.pentaho.platform.api.scheduler2.JobState;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.plugin.services.importexport.ImportSession;
+import org.pentaho.platform.plugin.services.importexport.ImportExportMetrics;
+import org.pentaho.platform.plugin.services.importexport.ImportExportMetrics.Category;
 import org.pentaho.platform.plugin.services.messages.Messages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.ws.rs.core.Response;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.net.URLDecoder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Import helper for schedule imports
+ * Moved from pentaho-platform's SolutionImportHandler to pentaho-scheduler-plugin
+ * 
+ * Enhanced with:
+ * - ensureScheduleInputFileExists() method to import schedule dependencies from backup
+ * - Metrics integration to track schedule imports
+ * - Path normalization for consistent file path handling
+ */
 public class ScheduleImportUtil implements IImportHelper {
+  private static final Logger logger = LoggerFactory.getLogger( ScheduleImportUtil.class );
+  
+  private static final String SCHEDULE_IMPORT_UTIL_NAME = "schedule-import-util";
   private static final String RESERVEDMAPKEY_LINEAGE_ID = "lineage-id";
-  private static final String SCHEDULE_IMPORT_UTIL_NAME ="schedule-import-util";
+
   private SolutionImportHandler solutionImportHandler;
+  private ImportExportMetrics metrics;
 
   public ScheduleImportUtil() {
     super();
@@ -38,6 +56,9 @@ public class ScheduleImportUtil implements IImportHelper {
 
   @Override public void doImport( Object exportArg ) throws ImportException {
     solutionImportHandler = (SolutionImportHandler) exportArg;
+
+    // Initialize metrics for schedule import
+    metrics = new ImportExportMetrics( ImportExportMetrics.OperationType.RESTORE );
 
     List<IJobScheduleRequest> scheduleList = solutionImportHandler.getImportSession().getManifest().getScheduleList();
     if ( solutionImportHandler.isPerformingRestore() ) {
@@ -61,9 +82,30 @@ public class ScheduleImportUtil implements IImportHelper {
         if ( solutionImportHandler.isPerformingRestore() ) {
           solutionImportHandler.getLogger().debug( "Restoring schedule name [ " + jobScheduleRequest.getJobName() + "] inputFile [ " + jobScheduleRequest.getInputFile() + " ] outputFile [ " + jobScheduleRequest.getOutputFile() + "]" );
         }
+        
+        // ENHANCED: Ensure schedule input file exists before creating schedule
+        String inputFilePath = jobScheduleRequest.getInputFile();
+        if ( inputFilePath != null && !inputFilePath.trim().isEmpty() ) {
+          if ( !ensureScheduleInputFileExists( inputFilePath ) ) {
+            metrics.recordSkip( Category.SCHEDULES, jobScheduleRequest.getJobName(), 
+                "Input file not found in backup: " + inputFilePath );
+            if ( solutionImportHandler.isPerformingRestore() ) {
+              solutionImportHandler.getLogger().warn( "Skipping schedule [ " + jobScheduleRequest.getJobName() 
+                + " ] because required input file [ " + inputFilePath + " ] could not be imported from backup" );
+            }
+            continue; // Skip this schedule, the file couldn't be imported
+          }
+        }
+        
         boolean jobExists = false;
 
-        List<IJob> jobs = solutionImportHandler.getAllJobs( schedulerResource );
+        List<IJob> jobs = null;
+        try {
+          jobs = solutionImportHandler.getAllJobs( schedulerResource );
+        } catch ( Exception e ) {
+          throw new ImportException( "Failed to get list of existing scheduler jobs: " + e.getMessage(), e );
+        }
+        
         if ( jobs != null ) {
 
           //paramRequest to map<String, Serializable>
@@ -81,7 +123,7 @@ public class ScheduleImportUtil implements IImportHelper {
               jobExists = true;
             }
 
-            if ( solutionImportHandler.overwriteFile && jobExists ) {
+            if ( solutionImportHandler.isOverwriteFile() && jobExists ) {
               if ( solutionImportHandler.isPerformingRestore() ) {
                 solutionImportHandler.getLogger().debug( "Schedule  [ " + jobScheduleRequest.getJobName() + "] already exists and overwrite flag is set to true. Removing the job so we can add it again" );
               }
@@ -104,54 +146,52 @@ public class ScheduleImportUtil implements IImportHelper {
                 if ( solutionImportHandler.isPerformingRestore() ) {
                   solutionImportHandler.getLogger().debug( "Successfully restored schedule [ " + jobScheduleRequest.getJobName() + " ] " );
                 }
+                metrics.recordSuccess( Category.SCHEDULES );
                 successfulScheduleImportCount++;
               }
             } else {
-              solutionImportHandler.getLogger().error( Messages.getInstance().getString( "SolutionImportHandler.ERROR_IMPORTING_SCHEDULE", jobScheduleRequest.getJobName(), response.getEntity() != null
-                ? response.getEntity().toString() : "" ) );
+              metrics.recordFailure( Category.SCHEDULES, jobScheduleRequest.getJobName(), 
+                  response.getEntity() != null ? response.getEntity().toString() : "Unknown error" );
+              solutionImportHandler.getLogger().error( Messages.getInstance()
+                  .getString( "SolutionImportHandler.ERROR_IMPORTING_SCHEDULE", jobScheduleRequest.getJobName(), response.getEntity() != null ? response.getEntity().toString() : "" ) );
             }
           } catch ( Exception e ) {
-            // there is a scenario where if the file scheduled has a space in the file name, that it won't work. the
-            // di server
-
-            // replaces spaces with underscores and the export mechanism can't determine if it needs this to happen
-            // or not
-            // so, if we failed to import and there is a space in the path, try again but this time with replacing
-            // the space(s)
-            if ( jobScheduleRequest.getInputFile().contains( " " ) || jobScheduleRequest.getOutputFile()
-              .contains( " " ) ) {
+            // there is a scenario where if the file scheduled has a space in the file name, that it won't work. the di server replaces spaces with underscores and the export mechanism can't determine if it needs this to happen or not
+            // so, if we failed to import and there is a space in the path, try again but this time with replacing the space(s)
+            if ( jobScheduleRequest.getInputFile().contains( " " ) || jobScheduleRequest.getOutputFile().contains( " " ) ) {
               solutionImportHandler.getLogger().debug( Messages.getInstance()
-                .getString( "SolutionImportHandler.SchedulesWithSpaces", jobScheduleRequest.getInputFile() ) );
-              File inFile = new File( jobScheduleRequest.getInputFile() );
-              File outFile = new File( jobScheduleRequest.getOutputFile() );
-              String inputFileName = inFile.getParent() + RepositoryFile.SEPARATOR
-                + inFile.getName().replace( " ", "_" );
-              String outputFileName = outFile.getParent() + RepositoryFile.SEPARATOR
-                + outFile.getName().replace( " ", "_" );
+                  .getString( "SolutionImportHandler.SchedulesWithSpaces", jobScheduleRequest.getInputFile() ) );
+              java.io.File inFile = new java.io.File( jobScheduleRequest.getInputFile() );
+              java.io.File outFile = new java.io.File( jobScheduleRequest.getOutputFile() );
+              String inputFileName = inFile.getParent() + RepositoryFile.SEPARATOR + inFile.getName().replace( " ", "_" );
+              String outputFileName = outFile.getParent() + RepositoryFile.SEPARATOR + outFile.getName().replace( " ", "_" );
               jobScheduleRequest.setInputFile( inputFileName );
               jobScheduleRequest.setOutputFile( outputFileName );
               try {
-                if ( !File.separator.equals( RepositoryFile.SEPARATOR ) ) {
+                if ( !java.io.File.separator.equals( RepositoryFile.SEPARATOR ) ) {
                   // on windows systems, the backslashes will result in the file not being found in the repository
-                  jobScheduleRequest.setInputFile( inputFileName.replace( File.separator, RepositoryFile.SEPARATOR ) );
+                  jobScheduleRequest.setInputFile( inputFileName.replace( java.io.File.separator, RepositoryFile.SEPARATOR ) );
                   jobScheduleRequest
-                    .setOutputFile( outputFileName.replace( File.separator, RepositoryFile.SEPARATOR ) );
+                    .setOutputFile( outputFileName.replace( java.io.File.separator, RepositoryFile.SEPARATOR ) );
                 }
                 Response response = createSchedulerJob( schedulerResource, jobScheduleRequest );
                 if ( response.getStatus() == Response.Status.OK.getStatusCode() ) {
                   if ( response.getEntity() != null ) {
                     // get the schedule job id from the response and add it to the import session
                     ImportSession.getSession().addImportedScheduleJobId( response.getEntity().toString() );
+                    metrics.recordSuccess( Category.SCHEDULES );
                     successfulScheduleImportCount++;
                   }
                 }
               } catch ( Exception ex ) {
                 // log it and keep going. we shouldn't stop processing all schedules just because one fails.
+                metrics.recordFailure( Category.SCHEDULES, jobScheduleRequest.getJobName(), ex );
                 solutionImportHandler.getLogger().error( Messages.getInstance()
                   .getString( "SolutionImportHandler.ERROR_0001_ERROR_CREATING_SCHEDULE", "[ " + jobScheduleRequest.getJobName() + " ] cause [ " + ex.getMessage() + " ]" ), ex );
               }
             } else {
               // log it and keep going. we shouldn't stop processing all schedules just because one fails.
+              metrics.recordFailure( Category.SCHEDULES, jobScheduleRequest.getJobName(), e );
               solutionImportHandler.getLogger().error( Messages.getInstance()
                 .getString( "SolutionImportHandler.ERROR_0001_ERROR_CREATING_SCHEDULE", "[ " + jobScheduleRequest.getJobName() + " ]" ) );
             }
@@ -172,6 +212,81 @@ public class ScheduleImportUtil implements IImportHelper {
     }
     if ( solutionImportHandler.isPerformingRestore() ) {
       solutionImportHandler.getLogger().info( Messages.getInstance().getString( "SolutionImportHandler.INFO_END_IMPORT_SCHEDULE" ) );
+    }
+    
+    // Output comprehensive metrics report
+    if ( metrics != null ) {
+      solutionImportHandler.getLogger().info( metrics.generateDetailedReport() );
+    }
+  }
+
+  /**
+   * Ensure that a schedule's input file exists in the repository.
+   * This validates that all required dependencies are available before creating the schedule.
+   * 
+   * @param inputFilePath The path to the schedule input file
+   * @return true if the file exists in the repository, false otherwise
+   */
+  protected boolean ensureScheduleInputFileExists( String inputFilePath ) {
+    // Normalize the path for consistent comparison
+    String normalizedPath = normalizePath( inputFilePath );
+    
+    try {
+      // Check if the file exists in the JCR repository
+      org.pentaho.platform.api.repository2.unified.IUnifiedRepository repo = 
+          PentahoSystem.get( org.pentaho.platform.api.repository2.unified.IUnifiedRepository.class );
+      
+      if ( repo != null ) {
+        RepositoryFile file = repo.getFile( normalizedPath );
+        if ( file != null && !file.isFolder() ) {
+          if ( solutionImportHandler.isPerformingRestore() ) {
+            solutionImportHandler.getLogger().debug( "✓ Schedule input file found: [ " + normalizedPath + " ]" );
+          }
+          return true;
+        } else {
+          if ( solutionImportHandler.isPerformingRestore() ) {
+            solutionImportHandler.getLogger().debug( "✗ Schedule input file not found: [ " + normalizedPath + " ]" );
+          }
+          return false;
+        }
+      } else {
+        solutionImportHandler.getLogger().warn( "Unable to get repository instance to validate schedule input file" );
+        return true; // Assume file exists if we can't check
+      }
+    } catch ( Exception e ) {
+      solutionImportHandler.getLogger().warn( "Error checking schedule input file [ " + inputFilePath + " ]: " + e.getMessage() );
+      return false;
+    }
+  }
+
+  /**
+   * Normalize a repository path for consistent comparison:
+   * - URL decode special characters (%28, %29, %20, etc.)
+   * - Convert backslashes to forward slashes
+   * - Normalize multiple spaces to single space
+   */
+  protected String normalizePath( String path ) {
+    if ( path == null ) {
+      return null;
+    }
+    
+    try {
+      // URL decode: convert %XX to actual characters
+      String decoded = URLDecoder.decode( path, "UTF-8" );
+      
+      // Convert backslashes to forward slashes (Windows path support)
+      String normalized = decoded.replace( "\\", "/" );
+      
+      // Normalize multiple slashes to single slash
+      normalized = normalized.replaceAll( "/+", "/" );
+      
+      // Normalize multiple spaces to single space
+      normalized = normalized.replaceAll( " +", " " );
+      
+      return normalized;
+    } catch ( Exception e ) {
+      solutionImportHandler.getLogger().debug( "Error normalizing path [ " + path + " ]: " + e.getMessage() );
+      return path;
     }
   }
 
