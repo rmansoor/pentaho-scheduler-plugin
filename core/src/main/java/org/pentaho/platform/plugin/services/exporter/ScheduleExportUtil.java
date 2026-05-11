@@ -285,14 +285,8 @@ public class ScheduleExportUtil implements IExportHelper {
           String jobOwner = job.getUserName();
           if ( jobOwner != null && !jobOwner.trim().isEmpty() ) {
             log.debug( "Exporting schedule owner user [ " + jobOwner + " ] for schedule [ " + job.getJobName() + " ]" );
-            // Use reflection to call exportUserAndRole if available
-            try {
-              java.lang.reflect.Method method = exporter.getClass().getMethod( "exportUserAndRole", String.class );
-              method.invoke( exporter, jobOwner );
-            } catch ( Exception e ) {
-              log.debug( "Could not export schedule owner via exporter method: " + e.getMessage() );
-              // If the method doesn't exist, we'll rely on the main user export to handle it
-            }
+            // Call platform's exportUserAndRole method for this schedule owner
+            exporter.exportUserAndRole( jobOwner );
           }
           
           // EXPORT DEPENDENCIES: Export the schedule's referenced input file to the bundle

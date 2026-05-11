@@ -15,6 +15,8 @@ import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.plugin.services.importexport.ImportSession;
 import org.pentaho.platform.plugin.services.importexport.ImportExportMetrics;
 import org.pentaho.platform.plugin.services.importexport.ImportExportMetrics.Category;
+import org.pentaho.platform.plugin.services.importexport.UserExport;
+import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
 import org.pentaho.platform.plugin.services.messages.Messages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,6 +106,12 @@ public class ScheduleImportUtil implements IImportHelper {
               continue; // Skip this schedule, the file couldn't be imported
             }
           }
+        }
+        
+        // PHASE 1.5: Import the schedule owner user (if not already imported)
+        String scheduleOwnerUsername = extractScheduleOwnerUsername( jobScheduleRequest );
+        if ( scheduleOwnerUsername != null && !scheduleOwnerUsername.trim().isEmpty() ) {
+          importScheduleOwnerIfNeeded( scheduleOwnerUsername );
         }
         
         // PHASE 2: Now that file is guaranteed to exist, proceed with schedule import
@@ -416,5 +424,85 @@ public class ScheduleImportUtil implements IImportHelper {
 
   @Override public String getName() {
     return SCHEDULE_IMPORT_UTIL_NAME;
+  }
+
+  /**
+   * Extract the schedule owner username from the job schedule request.
+   * The owner is stored in the job parameters using the reserved key RESERVEDMAPKEY_ACTIONUSER.
+   * 
+   * @param jobScheduleRequest the job schedule request to extract username from
+   * @return the username of the schedule owner, or null if not found
+   */
+  protected String extractScheduleOwnerUsername( IJobScheduleRequest jobScheduleRequest ) {
+    if ( jobScheduleRequest == null || jobScheduleRequest.getJobParameters() == null ) {
+      return null;
+    }
+    
+    // Search for the schedule owner parameter
+    for ( IJobScheduleParam param : jobScheduleRequest.getJobParameters() ) {
+      if ( IScheduler.RESERVEDMAPKEY_ACTIONUSER.equals( param.getName() ) ) {
+        String username = (String) param.getValue();
+        return username != null ? username.trim() : null;
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Import the schedule owner user if needed.
+   * Gets the UserExport from the manifest and calls SolutionImportHandler to import the user.
+   * This ensures the schedule owner exists before the schedule is created.
+   * 
+   * @param scheduleOwnerUsername the username of the schedule owner to import
+   */
+  protected void importScheduleOwnerIfNeeded( String scheduleOwnerUsername ) {
+    if ( scheduleOwnerUsername == null || scheduleOwnerUsername.trim().isEmpty() ) {
+      return;
+    }
+    
+    try {
+      // Get the export manifest which contains all user exports
+      ExportManifest manifest = solutionImportHandler.getImportSession().getManifest();
+      if ( manifest == null || manifest.getUserExports() == null ) {
+        solutionImportHandler.getLogger().debug( "No user exports in manifest, schedule owner [ " + scheduleOwnerUsername + " ] may need to be created manually" );
+        return;
+      }
+      
+      // Find the matching UserExport for this schedule owner
+      UserExport scheduleOwnerUser = null;
+      for ( UserExport user : manifest.getUserExports() ) {
+        if ( scheduleOwnerUsername.equals( user.getUsername() ) ) {
+          scheduleOwnerUser = user;
+          break;
+        }
+      }
+      
+      if ( scheduleOwnerUser == null ) {
+        solutionImportHandler.getLogger().debug( "Schedule owner user [ " + scheduleOwnerUsername + " ] not found in export manifest" );
+        return;
+      }
+      
+      // Import the schedule owner using SolutionImportHandler
+      if ( solutionImportHandler.isPerformingRestore() ) {
+        solutionImportHandler.getLogger().debug( "Importing schedule owner user [ " + scheduleOwnerUsername + " ]" );
+      }
+      
+      // Create a map to track role associations (required by importScheduleOwnerUser)
+      Map<String, List<String>> roleToUserMap = new HashMap<>();
+      
+      // Import the user and their roles
+      boolean success = solutionImportHandler.importScheduleOwnerUser( scheduleOwnerUsername, scheduleOwnerUser, roleToUserMap );
+      
+      if ( success && solutionImportHandler.isPerformingRestore() ) {
+        solutionImportHandler.getLogger().debug( "Successfully imported schedule owner user [ " + scheduleOwnerUsername + " ]" );
+      } else if ( !success && solutionImportHandler.isPerformingRestore() ) {
+        solutionImportHandler.getLogger().warn( "Failed to import schedule owner user [ " + scheduleOwnerUsername + " ]" );
+      }
+    } catch ( Exception e ) {
+      solutionImportHandler.getLogger().warn( "Error importing schedule owner user [ " + scheduleOwnerUsername + " ]: " + e.getMessage(), e );
+      // Don't fail the entire schedule import if user import fails
+      // The user may already exist or can be created manually
+    }
   }
 }
