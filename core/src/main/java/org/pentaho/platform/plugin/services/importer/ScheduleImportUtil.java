@@ -263,10 +263,18 @@ public class ScheduleImportUtil implements IImportHelper {
     try {
       // Call SolutionImportHandler to import the file from the backup bundle
       if ( solutionImportHandler.importFileFromBundle( normalizedPath ) ) {
-        if ( solutionImportHandler.isPerformingRestore() ) {
-          solutionImportHandler.getLogger().debug( "Successfully imported schedule dependency file from backup: [ " + normalizedPath + " ]" );
+        // CRITICAL: Verify the file actually exists after import before returning success
+        RepositoryFile importedFile = repo.getFile( normalizedPath );
+        if ( importedFile != null ) {
+          if ( solutionImportHandler.isPerformingRestore() ) {
+            solutionImportHandler.getLogger().debug( "Successfully imported and verified schedule dependency file from backup: [ " + normalizedPath + " ]" );
+          }
+          return true;
+        } else {
+          // Import method returned true but file doesn't actually exist
+          logger.warn( "Schedule input file import reported success but file not found in repository: [ " + normalizedPath + " ]" );
+          return false;
         }
-        return true;
       }
     } catch ( Exception e ) {
       logger.warn( "Error importing schedule dependency file [ " + normalizedPath + " ]: " + e.getMessage() );
