@@ -25,8 +25,10 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.net.URLDecoder;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Import helper for schedule imports
@@ -69,6 +71,10 @@ public class ScheduleImportUtil implements IImportHelper {
         solutionImportHandler.getLogger().info( Messages.getInstance().getString( "SolutionImportHandler.INFO_COUNT_SCHEDULUE", scheduleList.size() ) );
       }
       int successfulScheduleImportCount = 0;
+      
+      // CRITICAL: Import schedule owners (users) first before creating schedules
+      importScheduleOwners( scheduleList );
+      
       IScheduler scheduler = PentahoSystem.get( IScheduler.class, "IScheduler2", null ); //$NON-NLS-1$
       ISchedulerResource schedulerResource = scheduler.createSchedulerResource();
       if ( solutionImportHandler.isPerformingRestore() ) {
@@ -330,6 +336,90 @@ public class ScheduleImportUtil implements IImportHelper {
     } catch ( Exception e ) {
       solutionImportHandler.getLogger().debug( "Error normalizing path [ " + path + " ]: " + e.getMessage() );
       return path;
+    }
+  }
+
+  /**
+   * Import schedule owners (users) from the schedule list before creating schedules.
+   * This ensures users exist in the system before schedules reference them.
+   * 
+   * @param scheduleList the list of schedules to extract owners from
+   */
+  protected void importScheduleOwners( List<IJobScheduleRequest> scheduleList ) {
+    if ( CollectionUtils.isEmpty( scheduleList ) ) {
+      return;
+    }
+    
+    Set<String> ownerNames = new HashSet<>();
+    
+    // Extract all unique owner names from schedule job parameters
+    for ( IJobScheduleRequest schedule : scheduleList ) {
+      // Owner is typically stored in job parameters under specific keys
+      List<IJobScheduleParam> params = schedule.getJobParameters();
+      if ( params != null ) {
+        for ( IJobScheduleParam param : params ) {
+          // Check common owner parameter names
+          if ( param.getName() != null && 
+               ( param.getName().equals( "owner" ) || 
+                 param.getName().equals( "userName" ) || 
+                 param.getName().equals( "user_name" ) ) &&
+               param.getValue() != null ) {
+            String ownerName = param.getValue().toString().trim();
+            if ( !ownerName.isEmpty() ) {
+              ownerNames.add( ownerName );
+            }
+          }
+        }
+      }
+    }
+    
+    if ( solutionImportHandler.isPerformingRestore() ) {
+      solutionImportHandler.getLogger().debug( "Found " + ownerNames.size() + " unique schedule owners to import" );
+    }
+    
+    // Import each owner from the backup bundle
+    for ( String ownerName : ownerNames ) {
+      try {
+        importScheduleOwner( ownerName );
+      } catch ( Exception e ) {
+        logger.warn( "Error importing schedule owner [ " + ownerName + " ]: " + e.getMessage() );
+        // Don't fail the entire import if one owner fails - continue with other owners
+      }
+    }
+  }
+
+  /**
+   * Import a single schedule owner (user) from the backup bundle.
+   * 
+   * @param userName the username to import
+   */
+  protected void importScheduleOwner( String userName ) {
+    if ( userName == null || userName.trim().isEmpty() ) {
+      return;
+    }
+    
+    // Try to import the user from the backup bundle using a standardized user path
+    String userPath = "/system/users/" + userName + ".xml";
+    
+    if ( solutionImportHandler.isPerformingRestore() ) {
+      solutionImportHandler.getLogger().debug( "Attempting to import schedule owner [ " + userName + " ] from backup" );
+    }
+    
+    try {
+      if ( solutionImportHandler.importFileFromBundle( userPath ) ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().debug( "Successfully imported schedule owner [ " + userName + " ]" );
+        }
+      } else {
+        // User file not in backup - this is not necessarily a failure
+        // The user might already exist in the system or might be created during import
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().debug( "Schedule owner [ " + userName + " ] not found in backup - it may already exist in the system" );
+        }
+      }
+    } catch ( Exception e ) {
+      // Log but don't fail - the user might exist in the system already
+      logger.debug( "Could not import schedule owner [ " + userName + " ] from backup: " + e.getMessage() );
     }
   }
 
