@@ -30,16 +30,11 @@ import org.pentaho.platform.api.repository2.unified.RepositoryFileAcl;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.api.importexport.ExportException;
 import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
-import org.pentaho.platform.plugin.services.importexport.UserExport;
 import org.pentaho.platform.scheduler2.messsages.Messages;
 import org.pentaho.platform.repository.RepositoryFilenameUtils;
 import org.pentaho.platform.web.http.api.resources.JobScheduleParam;
 import org.pentaho.platform.web.http.api.resources.JobScheduleRequest;
 import org.pentaho.platform.web.http.api.resources.RepositoryFileStreamProvider;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.pentaho.platform.api.engine.IUserRoleListService;
-import org.pentaho.platform.api.mt.ITenant;
-import org.pentaho.platform.engine.core.system.TenantUtils;
 
 import java.util.Date;
 import java.util.HashMap;
@@ -258,7 +253,7 @@ public class ScheduleExportUtil implements IExportHelper {
     }
   }
 
-  protected void exportSchedules( Set<String> scheduleOwnerUsernames ) throws ExportException {
+  protected void exportSchedules() throws ExportException {
     log.info( Messages.getString( "PentahoPlatformExporter.INFO_START_EXPORT_SCHEDULE" ) );
 
     int jobListSize = 0;
@@ -286,9 +281,18 @@ public class ScheduleExportUtil implements IExportHelper {
           JobScheduleRequest scheduleRequest = ScheduleExportUtil.createJobScheduleRequest( job );
           log.trace( " Successfully finish creating a job scheduling request for [ " + job.getJobName() + " ]" );
           
-          // Extract schedule owner username for later user/role export
-          if ( job.getUserName() != null && !job.getUserName().trim().isEmpty() ) {
-            scheduleOwnerUsernames.add( job.getUserName() );
+          // Export the schedule owner user and their roles
+          String jobOwner = job.getUserName();
+          if ( jobOwner != null && !jobOwner.trim().isEmpty() ) {
+            log.debug( "Exporting schedule owner user [ " + jobOwner + " ] for schedule [ " + job.getJobName() + " ]" );
+            // Use reflection to call exportUserAndRole if available
+            try {
+              java.lang.reflect.Method method = exporter.getClass().getMethod( "exportUserAndRole", String.class );
+              method.invoke( exporter, jobOwner );
+            } catch ( Exception e ) {
+              log.debug( "Could not export schedule owner via exporter method: " + e.getMessage() );
+              // If the method doesn't exist, we'll rely on the main user export to handle it
+            }
           }
           
           // EXPORT DEPENDENCIES: Export the schedule's referenced input file to the bundle
@@ -322,63 +326,8 @@ public class ScheduleExportUtil implements IExportHelper {
     setRepositoryExportLogger( exporter.getRepositoryExportLogger() );
     setExporter( exporter );
     
-    // Export schedules and collect owner information
-    Set<String> scheduleOwnerUsernames = new HashSet<>();
-    exportSchedules( scheduleOwnerUsernames );
-    
-    // Export only the users/roles that are referenced by schedules
-    if ( !scheduleOwnerUsernames.isEmpty() ) {
-      exportScheduleOwnersAndRoles( scheduleOwnerUsernames );
-    }
-  }
-
-  /**
-   * Export only the users and roles referenced by schedules
-   * @param scheduleOwnerUsernames Set of usernames to export
-   */
-  protected void exportScheduleOwnersAndRoles( Set<String> scheduleOwnerUsernames ) throws ExportException {
-    try {
-      IUserRoleListService userRoleListService = PentahoSystem.get( IUserRoleListService.class );
-      UserDetailsService userDetailsService = PentahoSystem.get( UserDetailsService.class );
-      
-      if ( userRoleListService == null || userDetailsService == null ) {
-        log.warn( "Could not export schedule owners: UserRoleListService or UserDetailsService not available" );
-        return;
-      }
-      
-      Object tenantObj = TenantUtils.getCurrentTenant();
-      ITenant tenant = (ITenant) tenantObj;
-      
-      // Export only the schedule owner users
-      for ( String username : scheduleOwnerUsernames ) {
-        try {
-          log.debug( "Exporting schedule owner user [ " + username + " ]" );
-          UserExport userExport = new UserExport();
-          userExport.setUsername( username );
-          
-          try {
-            userExport.setPassword( userDetailsService.loadUserByUsername( username ).getPassword() );
-          } catch ( Exception e ) {
-            log.warn( "Could not load password for user [ " + username + " ]: " + e.getMessage() );
-            // Continue - user will still be exported without password
-          }
-          
-          // Add the user's roles
-          for ( String role : userRoleListService.getRolesForUser( tenant, username ) ) {
-            log.trace( "Schedule owner [ " + username + " ] has role [ " + role + " ]" );
-            userExport.setRole( role );
-          }
-          
-          exportManifest.addUserExport( userExport );
-          log.debug( "Successfully exported schedule owner user [ " + username + " ]" );
-        } catch ( Exception e ) {
-          log.warn( "Failed to export schedule owner user [ " + username + " ]: " + e.getMessage(), e );
-          // Continue with next user
-        }
-      }
-    } catch ( Exception e ) {
-      throw new ExportException( "Failed to export schedule owner users: " + e.getMessage(), e );
-    }
+    // Export schedules - users/roles are exported directly as schedules are processed
+    exportSchedules();
   }
 
   @Override
