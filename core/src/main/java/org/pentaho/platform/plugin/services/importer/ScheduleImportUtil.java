@@ -83,20 +83,27 @@ public class ScheduleImportUtil implements IImportHelper {
           solutionImportHandler.getLogger().debug( "Restoring schedule name [ " + jobScheduleRequest.getJobName() + "] inputFile [ " + jobScheduleRequest.getInputFile() + " ] outputFile [ " + jobScheduleRequest.getOutputFile() + "]" );
         }
         
-        // ENHANCED: Ensure schedule input file exists before creating schedule
+        // PHASE 1: Import schedule dependencies from backup FIRST
         String inputFilePath = jobScheduleRequest.getInputFile();
         if ( inputFilePath != null && !inputFilePath.trim().isEmpty() ) {
-          if ( !ensureScheduleInputFileExists( inputFilePath ) ) {
-            metrics.recordSkip( Category.SCHEDULES, jobScheduleRequest.getJobName(), 
-                "Input file not found in backup: " + inputFilePath );
-            if ( solutionImportHandler.isPerformingRestore() ) {
-              solutionImportHandler.getLogger().warn( "Skipping schedule [ " + jobScheduleRequest.getJobName() 
-                + " ] because required input file [ " + inputFilePath + " ] could not be imported from backup" );
+          // Normalize path
+          String normalizedInputPath = inputFilePath.replace( File.separator, RepositoryFile.SEPARATOR );
+          
+          if ( !fileExistsInRepository( normalizedInputPath ) ) {
+            // File doesn't exist - import it from backup
+            if ( !importScheduleDependencyFile( normalizedInputPath ) ) {
+              metrics.recordSkip( Category.SCHEDULES, jobScheduleRequest.getJobName(), 
+                  "Input file not found in backup: " + inputFilePath );
+              if ( solutionImportHandler.isPerformingRestore() ) {
+                solutionImportHandler.getLogger().warn( "Skipping schedule [ " + jobScheduleRequest.getJobName() 
+                  + " ] because required input file [ " + inputFilePath + " ] could not be imported from backup" );
+              }
+              continue; // Skip this schedule, the file couldn't be imported
             }
-            continue; // Skip this schedule, the file couldn't be imported
           }
         }
         
+        // PHASE 2: Now that file is guaranteed to exist, proceed with schedule import
         boolean jobExists = false;
 
         List<IJob> jobs = null;
@@ -323,6 +330,67 @@ public class ScheduleImportUtil implements IImportHelper {
     } catch ( Exception e ) {
       solutionImportHandler.getLogger().debug( "Error normalizing path [ " + path + " ]: " + e.getMessage() );
       return path;
+    }
+  }
+
+  /**
+   * Check if a file exists in the repository
+   */
+  protected boolean fileExistsInRepository( String normalizedPath ) {
+    if ( normalizedPath == null || normalizedPath.trim().isEmpty() ) {
+      return true;
+    }
+    
+    org.pentaho.platform.api.repository2.unified.IUnifiedRepository repo = 
+        PentahoSystem.get( org.pentaho.platform.api.repository2.unified.IUnifiedRepository.class );
+    
+    if ( repo == null ) {
+      logger.warn( "Unable to get repository instance to validate schedule input file" );
+      return false;
+    }
+    
+    RepositoryFile file = repo.getFile( normalizedPath );
+    return file != null;
+  }
+
+  /**
+   * Import a schedule dependency file from the backup bundle
+   * 
+   * @param normalizedPath the normalized repository path of the file to import
+   * @return true if the file was successfully imported and verified to exist, false otherwise
+   */
+  protected boolean importScheduleDependencyFile( String normalizedPath ) {
+    if ( normalizedPath == null || normalizedPath.trim().isEmpty() ) {
+      return true;
+    }
+    
+    if ( solutionImportHandler.isPerformingRestore() ) {
+      solutionImportHandler.getLogger().debug( "Importing schedule dependency file from backup: [ " + normalizedPath + " ]" );
+    }
+    
+    try {
+      // Import the file from the backup bundle
+      boolean imported = solutionImportHandler.importFileFromBundle( normalizedPath );
+      
+      if ( imported ) {
+        // Verify the file was actually imported and is now in the repository
+        if ( fileExistsInRepository( normalizedPath ) ) {
+          if ( solutionImportHandler.isPerformingRestore() ) {
+            solutionImportHandler.getLogger().debug( "Successfully imported and verified schedule dependency file: [ " + normalizedPath + " ]" );
+          }
+          return true;
+        } else {
+          // Import reported success but file still doesn't exist
+          logger.warn( "File import reported success but file not found in repository after import: [ " + normalizedPath + " ]" );
+          return false;
+        }
+      } else {
+        logger.warn( "Failed to import schedule dependency file from backup: [ " + normalizedPath + " ]" );
+        return false;
+      }
+    } catch ( Exception e ) {
+      logger.warn( "Exception while importing schedule dependency file [ " + normalizedPath + " ]: " + e.getMessage(), e );
+      return false;
     }
   }
 
