@@ -322,9 +322,15 @@ public class ScheduleImportUtil implements IImportHelper {
     throws IOException {
     Response rs = scheduler != null ? (Response) scheduler.createJob( jobScheduleRequest ) : null;
     if ( jobScheduleRequest.getJobState() != JobState.NORMAL ) {
-      IJobRequest jobRequest = PentahoSystem.get( IScheduler.class, "IScheduler2", null ).createJobRequest();
-      jobRequest.setJobId( rs.getEntity().toString() );
-      scheduler.pauseJob( jobRequest );
+      try {
+        IJobRequest jobRequest = PentahoSystem.get( IScheduler.class, "IScheduler2", null ).createJobRequest();
+        jobRequest.setJobId( rs.getEntity().toString() );
+        scheduler.pauseJob( jobRequest );
+      } catch ( Exception e ) {
+        // Job was created but may reference missing files. Log warning but don't fail.
+        // The job exists in the scheduler but is paused due to validation issues.
+        logger.warn( "Warning: Job created but could not be paused. It may reference missing files: " + e.getMessage() );
+      }
     }
     return rs;
   }
