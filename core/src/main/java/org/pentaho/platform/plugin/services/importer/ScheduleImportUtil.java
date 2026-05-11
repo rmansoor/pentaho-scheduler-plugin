@@ -101,7 +101,7 @@ public class ScheduleImportUtil implements IImportHelper {
 
         List<IJob> jobs = null;
         try {
-          jobs = solutionImportHandler.getAllJobs( schedulerResource );
+          jobs = schedulerResource.getJobsList();
         } catch ( Exception e ) {
           throw new ImportException( "Failed to get list of existing scheduler jobs: " + e.getMessage(), e );
         }
