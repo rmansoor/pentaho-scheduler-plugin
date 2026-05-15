@@ -187,8 +187,9 @@ public class ScheduleExportUtil implements IExportHelper {
    * 
    * @param inputFilePath the repository path of the file referenced by the schedule
    * @param jobName the name of the schedule (for logging)
+   * @param jobOwner the username of the schedule owner (for folder ownership)
    */
-  protected void exportScheduleReferencedFile( String inputFilePath, String jobName ) {
+  protected void exportScheduleReferencedFile( String inputFilePath, String jobName, String jobOwner ) {
     if ( inputFilePath == null || inputFilePath.trim().isEmpty() ) {
       return; // No input file to export
     }
@@ -239,6 +240,11 @@ public class ScheduleExportUtil implements IExportHelper {
         }
         
         log.debug( "Successfully exported schedule dependency: [ " + inputFilePath + " ]" );
+        
+        // CRITICAL FIX: Export parent folders so they have correct ownership during import
+        // This prevents folders from being created with admin ownership
+        exportScheduleReferencedFolders( inputFilePath, jobOwner, jobName );
+        
       } else {
         log.warn( "Exporter not available - unable to export schedule dependency [ " + inputFilePath + " ]" );
       }
@@ -250,6 +256,82 @@ public class ScheduleExportUtil implements IExportHelper {
       // Log any other errors but continue
       log.warn( "Error while exporting schedule input file [ " + inputFilePath + " ] for schedule [ " + jobName + " ]: " + e.getMessage() );
       log.debug( "Error while exporting schedule input file [ " + inputFilePath + " ]", e );
+    }
+  }
+
+  /**
+   * Exports all parent folders of a schedule-referenced file to ensure they have correct ownership.
+   * Prevents folders from being created with admin ownership during import.
+   *
+   * @param filePath the file path
+   * @param folderOwner the owner username for the folders
+   * @param jobName the schedule name (for logging)
+   */
+  protected void exportScheduleReferencedFolders( String filePath, String folderOwner, String jobName ) {
+    if ( filePath == null || filePath.trim().isEmpty() ) {
+      return; // No path to process
+    }
+
+    try {
+      IUnifiedRepository repository = PentahoSystem.get( IUnifiedRepository.class );
+      if ( repository == null ) {
+        log.debug( "Unable to access repository to export schedule folders for [ " + filePath + " ]" );
+        return;
+      }
+
+      // Extract parent directory paths
+      Set<String> parentPaths = new HashSet<>();
+      String currentPath = filePath;
+      
+      // Get parent directories by removing the file name and each subsequent level
+      while ( currentPath.contains( "/" ) && !currentPath.equals( "/" ) ) {
+        currentPath = currentPath.substring( 0, currentPath.lastIndexOf( "/" ) );
+        if ( !currentPath.isEmpty() && !currentPath.equals( "/" ) ) {
+          parentPaths.add( currentPath );
+        }
+      }
+
+      // Export each parent folder
+      for ( String parentPath : parentPaths ) {
+        try {
+          RepositoryFile folder = repository.getFile( parentPath );
+          if ( folder == null || !folder.isFolder() ) {
+            log.debug( "Parent folder not found or is not a folder: [ " + parentPath + " ]" );
+            continue;
+          }
+
+          // Export the folder to the bundle
+          if ( exporter != null ) {
+            log.debug( "Exporting parent folder for schedule: [ " + parentPath + " ] for schedule [ " + jobName + " ]" );
+            exporter.exportFileByPath( parentPath );
+
+            // Add folder to manifest with correct ownership
+            if ( exportManifest != null && folderOwner != null ) {
+              try {
+                // Get current ACL and prepare new one with schedule owner
+                RepositoryFileAcl acl = null;
+                try {
+                  acl = repository.getAcl( folder.getId() );
+                } catch ( Exception e ) {
+                  log.debug( "Could not retrieve ACL for folder [ " + parentPath + " ]: " + e.getMessage() );
+                }
+
+                // Add folder to manifest
+                exportManifest.add( folder, acl );
+                log.debug( "Added schedule folder to manifest: [ " + parentPath + " ] for owner [ " + folderOwner + " ]" );
+              } catch ( Exception e ) {
+                log.debug( "Could not add folder to manifest [ " + parentPath + " ]: " + e.getMessage() );
+              }
+            }
+          }
+        } catch ( Exception e ) {
+          log.debug( "Error exporting parent folder [ " + parentPath + " ] for schedule [ " + jobName + " ]: " + e.getMessage() );
+          // Continue with next folder
+        }
+      }
+
+    } catch ( Exception e ) {
+      log.debug( "Error while processing schedule folders for [ " + filePath + " ]: " + e.getMessage() );
     }
   }
 
@@ -281,6 +363,13 @@ public class ScheduleExportUtil implements IExportHelper {
           JobScheduleRequest scheduleRequest = ScheduleExportUtil.createJobScheduleRequest( job );
           log.trace( " Successfully finish creating a job scheduling request for [ " + job.getJobName() + " ]" );
           
+          // CHECK: Should this schedule be exported?
+          // Filter out schedules with end date in the past or invalid repeat interval
+          if ( !shouldExportSchedule( job, scheduleRequest ) ) {
+            log.info( "Skipping schedule [ " + job.getJobName() + " ] - does not meet export criteria (invalid end date or repeat interval)" );
+            continue;
+          }
+          
           // Export the schedule owner user and their roles
           String jobOwner = job.getUserName();
           if ( jobOwner != null && !jobOwner.trim().isEmpty() ) {
@@ -292,7 +381,7 @@ public class ScheduleExportUtil implements IExportHelper {
           // EXPORT DEPENDENCIES: Export the schedule's referenced input file to the bundle
           String inputFilePath = scheduleRequest.getInputFile();
           if ( inputFilePath != null && !inputFilePath.trim().isEmpty() ) {
-            exportScheduleReferencedFile( inputFilePath, job.getJobName() );
+            exportScheduleReferencedFile( inputFilePath, job.getJobName(), jobOwner );
           }
           
           exportManifest.addSchedule( scheduleRequest );
@@ -311,6 +400,62 @@ public class ScheduleExportUtil implements IExportHelper {
 
       log.info( Messages.getInstance().getString( "PentahoPlatformExporter.INFO_END_EXPORT_SCHEDULE" ) );
     }
+  }
+
+  /**
+   * Determines whether a schedule should be exported based on its validity.
+   * 
+   * Filters out schedules that:
+   * - Have an end date in the past (already expired/completed)
+   * - Have a repeat interval less than zero (invalid)
+   * 
+   * @param job the Job to evaluate
+   * @param scheduleRequest the JobScheduleRequest for the job
+   * @return true if the schedule should be exported, false if it should be skipped
+   */
+  protected boolean shouldExportSchedule( Job job, JobScheduleRequest scheduleRequest ) {
+    if ( job == null || scheduleRequest == null ) {
+      return true; // Export by default if we can't determine validity
+    }
+
+    long now = System.currentTimeMillis();
+
+    // Check SimpleJobTrigger
+    if ( scheduleRequest.getSimpleJobTrigger() != null ) {
+      SimpleJobTrigger trigger = scheduleRequest.getSimpleJobTrigger();
+      Date endTimeDate = trigger.getEndTime();
+      long repeatInterval = trigger.getRepeatInterval();
+
+      // Filter 1: End date is in the past (schedule already expired)
+      if ( endTimeDate != null && endTimeDate.getTime() < now ) {
+        log.info( "Schedule [ " + job.getJobName() + " ] has end date in the past (endTime=" + endTimeDate.getTime() + 
+          ", now=" + now + "). Excluding from export." );
+        return false;
+      }
+
+      // Filter 2: Repeat interval is invalid (less than zero)
+      if ( repeatInterval < 0 ) {
+        log.info( "Schedule [ " + job.getJobName() + " ] has invalid repeat interval (" + repeatInterval + 
+          " < 0). Excluding from export." );
+        return false;
+      }
+    }
+
+    // Check CronJobTrigger
+    if ( scheduleRequest.getCronJobTrigger() != null ) {
+      CronJobTrigger trigger = scheduleRequest.getCronJobTrigger();
+      Date endTimeDate = trigger.getEndTime();
+
+      // Filter: End date is in the past (cron schedule already expired)
+      if ( endTimeDate != null && endTimeDate.getTime() < now ) {
+        log.info( "Cron schedule [ " + job.getJobName() + " ] has end date in the past (endTime=" + endTimeDate.getTime() + 
+          ", now=" + now + "). Excluding from export." );
+        return false;
+      }
+    }
+
+    // Schedule passed all filters, should be exported
+    return true;
   }
 
   @Override

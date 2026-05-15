@@ -3,7 +3,11 @@ package org.pentaho.platform.plugin.services.importer;
 import org.apache.commons.collections.CollectionUtils;
 import org.pentaho.platform.api.importexport.IImportHelper;
 import org.pentaho.platform.api.importexport.ImportException;
+import org.pentaho.platform.api.repository2.unified.IUnifiedRepository;
 import org.pentaho.platform.api.repository2.unified.RepositoryFile;
+import org.pentaho.platform.api.repository2.unified.RepositoryFileAcl;
+import org.pentaho.platform.api.repository2.unified.RepositoryFilePermission;
+import org.pentaho.platform.api.repository2.unified.RepositoryFileSid;
 import org.pentaho.platform.api.scheduler2.IJob;
 import org.pentaho.platform.api.scheduler2.IJobRequest;
 import org.pentaho.platform.api.scheduler2.IJobScheduleParam;
@@ -11,13 +15,16 @@ import org.pentaho.platform.api.scheduler2.IJobScheduleRequest;
 import org.pentaho.platform.api.scheduler2.IScheduler;
 import org.pentaho.platform.api.scheduler2.ISchedulerResource;
 import org.pentaho.platform.api.scheduler2.JobState;
+import org.pentaho.platform.engine.core.system.PentahoSessionHolder;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
+import org.pentaho.platform.engine.security.SecurityHelper;
 import org.pentaho.platform.plugin.services.importexport.ImportSession;
 import org.pentaho.platform.plugin.services.importexport.ImportExportMetrics;
 import org.pentaho.platform.plugin.services.importexport.ImportExportMetrics.Category;
 import org.pentaho.platform.plugin.services.importexport.UserExport;
 import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
 import org.pentaho.platform.plugin.services.messages.Messages;
+import org.pentaho.platform.web.http.api.resources.services.FileService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,9 +35,11 @@ import java.io.Serializable;
 import java.net.URLDecoder;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
 
 /**
  * Import helper for schedule imports
@@ -56,6 +65,24 @@ public class ScheduleImportUtil implements IImportHelper {
 
   public void registerAsHelper() {
     PentahoSystem.get( SolutionImportHandler.class, "solutionImportHandler", null ).addImportHelper( this );
+  }
+
+  public boolean shouldExecute( Object componentOverrides ) {
+    // Only execute if schedules are included in the profile
+    // Return true for full restore (componentOverrides == null)
+    if ( componentOverrides == null ) {
+      return true; // Full restore, include schedules
+    }
+    
+    // Cast to BackupComponentConfig if available
+    if ( componentOverrides instanceof org.pentaho.platform.plugin.services.importexport.BackupComponentConfig ) {
+      org.pentaho.platform.plugin.services.importexport.BackupComponentConfig config = 
+          (org.pentaho.platform.plugin.services.importexport.BackupComponentConfig) componentOverrides;
+      return config.isIncludeSchedules();
+    }
+    
+    // If type is unknown, default to include
+    return true;
   }
 
   @Override public void doImport( Object exportArg ) throws ImportException {
@@ -112,6 +139,21 @@ public class ScheduleImportUtil implements IImportHelper {
         String scheduleOwnerUsername = extractScheduleOwnerUsername( jobScheduleRequest );
         if ( scheduleOwnerUsername != null && !scheduleOwnerUsername.trim().isEmpty() ) {
           importScheduleOwnerIfNeeded( scheduleOwnerUsername );
+        }
+        
+        // PHASE 1.75: Ensure the schedule owner's home folder exists for output
+        String outputFile = jobScheduleRequest.getOutputFile();
+        if ( outputFile != null && !outputFile.trim().isEmpty() && scheduleOwnerUsername != null ) {
+          // Extract the directory path from the output file
+          String outputDirectory = outputFile.substring( 0, outputFile.lastIndexOf( "/" ) );
+          if ( outputDirectory.isEmpty() ) {
+            outputDirectory = "/";
+          }
+          
+          // Check if it's a user home folder (e.g., /home/user2)
+          if ( outputDirectory.startsWith( "/home/" ) ) {
+            ensureUserHomeFolderExists( scheduleOwnerUsername, outputDirectory );
+          }
         }
         
         // PHASE 2: Now that file is guaranteed to exist, proceed with schedule import
@@ -504,5 +546,209 @@ public class ScheduleImportUtil implements IImportHelper {
       // Don't fail the entire schedule import if user import fails
       // The user may already exist or can be created manually
     }
+  }
+
+  /**
+   * Ensures the user's home folder exists in the repository and is owned by the user.
+   * The folder is created while running as the target user to ensure proper ownership.
+   * This is critical for ScheduleOutputPathResolver to have the correct permissions.
+   *
+   * @param username the user who should own the folder
+   * @param homeFolderPath the full path to the user's home folder (e.g., /home/user2)
+   * @return true if the folder exists or was created successfully, false otherwise
+   */
+  protected boolean ensureUserHomeFolderExists( String username, String homeFolderPath ) {
+    if ( homeFolderPath == null || homeFolderPath.trim().isEmpty() ) {
+      solutionImportHandler.getLogger().warn( "No home folder path provided for user [" + username + "]" );
+      return false;
+    }
+
+    try {
+      // Check if folder already exists
+      IUnifiedRepository repo = PentahoSystem.get( IUnifiedRepository.class, PentahoSessionHolder.getSession() );
+      if ( repo == null ) {
+        logger.error( "Unable to get repository instance to create user home folder" );
+        return false;
+      }
+      
+      RepositoryFile homeFolder = repo.getFile( homeFolderPath );
+      if ( homeFolder != null && homeFolder.isFolder() ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().debug( "User home folder [" + homeFolderPath + "] already exists" );
+        }
+        return true;
+      }
+
+      // Folder does not exist, create it as the target user
+      // This ensures the folder is owned by the target user, not the current session user
+      // Running as the target user is critical for ScheduleOutputPathResolver to have proper permissions
+      boolean created = SecurityHelper.getInstance().runAsUser( username, new Callable<Boolean>() {
+        @Override
+        public Boolean call() throws Exception {
+          // Get a fresh repository instance in the context of the target user
+          IUnifiedRepository userRepo = PentahoSystem.get( IUnifiedRepository.class, PentahoSessionHolder.getSession() );
+          
+          // Extract parent path and folder name
+          String parentPath = homeFolderPath.substring( 0, homeFolderPath.lastIndexOf( "/" ) );
+          if ( parentPath.isEmpty() ) {
+            parentPath = "/";
+          }
+          String folderName = homeFolderPath.substring( homeFolderPath.lastIndexOf( "/" ) + 1 );
+
+          // Get parent folder
+          RepositoryFile parent = userRepo.getFile( parentPath );
+          if ( parent == null || !parent.isFolder() ) {
+            solutionImportHandler.getLogger().error( "Parent folder [" + parentPath + "] does not exist or is not a folder" );
+            return false;
+          }
+
+          // Create the folder - it will be owned by the current user (running as target user)
+          RepositoryFile newFolder = userRepo.createFolder( parent.getId(),
+              new RepositoryFile.Builder( folderName ).folder( true ).build(),
+              "user schedule output folder" );
+
+          return newFolder != null;
+        }
+      } );
+
+      if ( created ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().info( "Created user home folder [" + homeFolderPath + "] for user [" + username + "]" );
+        }
+        return true;
+      } else {
+        solutionImportHandler.getLogger().error( "Failed to create user home folder [" + homeFolderPath + "] for user [" + username + "]" );
+        return false;
+      }
+    } catch ( Exception e ) {
+      solutionImportHandler.getLogger().error( "Error ensuring user home folder [" + homeFolderPath + "] for user [" + username + "]: "
+          + e.getMessage(), e );
+      return false;
+    }
+  }
+
+  /**
+   * Validates and corrects schedule times before import.
+   * KEY FIX: Removes endTime for one-time schedules (repeatCount < 0) to prevent validation errors
+   * 
+   * One-time schedules (RUN_ONCE, repeatCount=-1) should NOT have an endTime constraint.
+   * When endTime is populated for one-time schedules, the scheduler validator fails with
+   * "End time cannot be before start time" error.
+   * 
+   * NOTE: This is a defensive correction during import. The primary filtering should happen 
+   * during export via ScheduleExportUtil.shouldExportSchedule() which prevents invalid schedules 
+   * from being exported in the first place.
+   * 
+   * @param schedule the schedule to validate
+   * @return true if valid or corrected, false if uncorrectable
+   */
+  protected boolean validateAndCorrectScheduleTime( IJobScheduleRequest schedule ) {
+    if ( schedule == null ) {
+      return false;
+    }
+
+    String scheduleName = "Schedule [" + schedule.getJobName() + "]";
+
+    // Check simple job trigger
+    if ( schedule.getSimpleJobTrigger() != null ) {
+      org.pentaho.platform.api.scheduler2.ISimpleJobTrigger trigger = schedule.getSimpleJobTrigger();
+      java.util.Date startTimeDate = trigger.getStartTime();
+      java.util.Date endTimeDate = trigger.getEndTime();
+      long duration = trigger.getDuration();
+      int repeatCount = trigger.getRepeatCount();
+      long repeatInterval = trigger.getRepeatInterval();
+      
+      long startTime = startTimeDate != null ? startTimeDate.getTime() : 0;
+      long endTime = endTimeDate != null ? endTimeDate.getTime() : 0;
+
+      // PRIMARY FIX: One-time schedules (repeatCount < 0) should NOT have endTime
+      if ( repeatCount < 0 && endTime > 0 ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().warn( scheduleName + 
+            " is a RUN_ONCE schedule (repeatCount=" + repeatCount + 
+            ") but has endTime. Removing endTime for one-time execution." );
+        }
+        trigger.setEndTime( null );  // Remove invalid end time
+        return true;
+      }
+
+      // Fix invalid repeatInterval when repeatCount >= 0
+      if ( repeatInterval < 0 && repeatCount >= 0 ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().warn( scheduleName + 
+            " has invalid repeatInterval: " + repeatInterval + 
+            ". Setting to default (1 hour)." );
+        }
+        trigger.setRepeatInterval( 3600000 );  // 1 hour
+      }
+
+      // Fix invalid start time
+      if ( startTime <= 0 ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().warn( scheduleName + " has invalid start time: " + startTime + 
+            ". Setting to current time." );
+        }
+        trigger.setStartTime( new java.util.Date() );
+      }
+
+      // Fix end time < start time (secondary check)
+      if ( endTime > 0 && startTime > 0 && endTime < startTime ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().warn( scheduleName + " has end time before start time. " +
+            "Removing end time constraint." );
+        }
+        trigger.setEndTime( null );
+      }
+
+      // Fix invalid duration for repeating schedules
+      if ( duration <= 0 && repeatCount >= 0 ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().warn( scheduleName + " has invalid duration: " + duration + 
+            ". Setting to default (1 hour)." );
+        }
+        trigger.setDuration( 3600000 );  // 1 hour
+      }
+
+      // Verify final state after corrections
+      java.util.Date finalStartTime = trigger.getStartTime();
+      java.util.Date finalEndTime = trigger.getEndTime();
+      if ( finalStartTime != null && finalEndTime != null ) {
+        if ( finalEndTime.getTime() < finalStartTime.getTime() ) {
+          if ( solutionImportHandler.isPerformingRestore() ) {
+            solutionImportHandler.getLogger().error( scheduleName + 
+              " still has invalid time range after correction. Schedule will be skipped." );
+          }
+          return false; // Cannot fix, skip this schedule
+        }
+      }
+    }
+
+    // Validate cron trigger times
+    if ( schedule.getCronJobTrigger() != null ) {
+      org.pentaho.platform.api.scheduler2.ICronJobTrigger trigger = schedule.getCronJobTrigger();
+      java.util.Date startTimeDate = trigger.getStartTime();
+      java.util.Date endTimeDate = trigger.getEndTime();
+      
+      long startTime = startTimeDate != null ? startTimeDate.getTime() : 0;
+      long endTime = endTimeDate != null ? endTimeDate.getTime() : 0;
+
+      // Fix: Cron without end time (or end before start)
+      if ( endTime <= 0 || (endTime > 0 && endTime < startTime) ) {
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().debug( scheduleName + 
+            " cron schedule has no or invalid end time. Setting to far future (10 years)." );
+        }
+        
+        // Set end time to 10 years in future
+        long futureEndTime = startTime + (10L * 365 * 24 * 60 * 60 * 1000);
+        trigger.setEndTime( new java.util.Date( futureEndTime ) );
+      }
+    }
+
+    if ( solutionImportHandler.isPerformingRestore() ) {
+      solutionImportHandler.getLogger().debug( scheduleName + " passed time validation." );
+    }
+
+    return true;
   }
 }
