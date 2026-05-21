@@ -67,6 +67,7 @@ public class ScheduleImportUtil implements IImportHelper {
     PentahoSystem.get( SolutionImportHandler.class, "solutionImportHandler", null ).addImportHelper( this );
   }
 
+
   public boolean shouldExecute( Object componentOverrides ) {
     // Only execute if schedules are included in the profile
     // Return true for full restore (componentOverrides == null)
