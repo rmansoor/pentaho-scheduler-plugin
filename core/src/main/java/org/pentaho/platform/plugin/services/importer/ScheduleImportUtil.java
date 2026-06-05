@@ -1,13 +1,13 @@
 package org.pentaho.platform.plugin.services.importer;
 
 import org.apache.commons.collections.CollectionUtils;
+import org.pentaho.platform.api.engine.ISystemConfig;
+import org.pentaho.platform.api.engine.ISystemSettings;
 import org.pentaho.platform.api.importexport.IImportHelper;
 import org.pentaho.platform.api.importexport.ImportException;
-import org.pentaho.platform.api.repository2.unified.IUnifiedRepository;
+import org.pentaho.platform.api.mt.ITenant;
+import org.pentaho.platform.api.mt.ITenantManager;
 import org.pentaho.platform.api.repository2.unified.RepositoryFile;
-import org.pentaho.platform.api.repository2.unified.RepositoryFileAcl;
-import org.pentaho.platform.api.repository2.unified.RepositoryFilePermission;
-import org.pentaho.platform.api.repository2.unified.RepositoryFileSid;
 import org.pentaho.platform.api.scheduler2.IJob;
 import org.pentaho.platform.api.scheduler2.IJobRequest;
 import org.pentaho.platform.api.scheduler2.IJobScheduleParam;
@@ -15,12 +15,14 @@ import org.pentaho.platform.api.scheduler2.IJobScheduleRequest;
 import org.pentaho.platform.api.scheduler2.IScheduler;
 import org.pentaho.platform.api.scheduler2.ISchedulerResource;
 import org.pentaho.platform.api.scheduler2.JobState;
+import org.pentaho.platform.core.mt.Tenant;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
+import org.pentaho.platform.engine.core.system.TenantUtils;
+import org.pentaho.platform.plugin.services.importexport.ComponentConfig;
 import org.pentaho.platform.plugin.services.importexport.ImportSession;
 import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
 
 import org.pentaho.platform.plugin.services.messages.Messages;
-import org.pentaho.platform.web.http.api.resources.services.FileService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,11 +32,8 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.net.URLDecoder;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Import helper for schedule imports.
@@ -62,26 +61,17 @@ public class ScheduleImportUtil implements IImportHelper {
     PentahoSystem.get( SolutionImportHandler.class, "solutionImportHandler", null ).addImportHelper( this );
   }
 
-  public boolean shouldExecute( Object componentOverrides ) {
-    // Only execute if schedules are included in the profile
-    // Return true for full restore (componentOverrides == null)
-    if ( componentOverrides == null ) {
-      return true; // Full restore, include schedules
+  @Override
+  public boolean shouldExecute( Object config ) {
+    if ( config instanceof ComponentConfig ) {
+      return ( ( ComponentConfig ) config ).isIncludeSchedules();
     }
-
-    // Cast to BackupComponentConfig if available
-    if ( componentOverrides instanceof org.pentaho.platform.plugin.services.importexport.BackupComponentConfig ) {
-      org.pentaho.platform.plugin.services.importexport.BackupComponentConfig config =
-        (org.pentaho.platform.plugin.services.importexport.BackupComponentConfig) componentOverrides;
-      return config.isIncludeSchedules();
-    }
-
-    // If type is unknown, default to include
-    return true;
+    return false;
   }
 
   @Override public void doImport( Object exportArg ) throws ImportException {
     solutionImportHandler = (SolutionImportHandler) exportArg;
+    ISystemSettings settings = PentahoSystem.getSystemSettings();
 
     List<IJobScheduleRequest> scheduleList = solutionImportHandler.getImportSession().getManifest().getScheduleList();
     if ( solutionImportHandler.isPerformingRestore() ) {
@@ -102,12 +92,51 @@ public class ScheduleImportUtil implements IImportHelper {
       if ( solutionImportHandler.isPerformingRestore() ) {
         solutionImportHandler.getLogger().debug( "Successfully paused the scheduler" );
       }
+      // Read property from system/security.properties
+      ISystemConfig config = PentahoSystem.get( ISystemConfig.class );
+      String provider = "jackrabbit";
+      if ( config != null ) {
+        provider = config.getProperty( "security.provider",  "jackrabbit");
+      }
       for ( IJobScheduleRequest jobScheduleRequest : scheduleList ) {
         if ( solutionImportHandler.isPerformingRestore() ) {
           solutionImportHandler.getLogger().debug( "Restoring schedule name [ " + jobScheduleRequest.getJobName() + "] inputFile [ " + jobScheduleRequest.getInputFile() + " ] outputFile [ " + jobScheduleRequest.getOutputFile() + "]" );
         }
 
-        // PHASE 1: Import schedule dependencies from backup FIRST
+        // PHASE 1: Import the schedule owner user if needed
+        // This creates the user account and home folder before schedule creation
+
+        String scheduleOwnerUsername = extractScheduleOwnerUsername( jobScheduleRequest );
+        if ( scheduleOwnerUsername != null && !scheduleOwnerUsername.trim().isEmpty() ) {
+          if ( provider.equalsIgnoreCase( "jackrabbit" ) ) {
+              ExportManifest manifest = solutionImportHandler.getImportSession().getManifest();
+              solutionImportHandler.importUserAndRole( scheduleOwnerUsername, manifest );
+          } else {
+            // System is configured with an external authentication provider. Skip user creation, but create the user's home folder
+            // Ensure home folder exists even for existing users (in case it was missing)
+
+            if ( solutionImportHandler.isPerformingRestore() ) {
+              solutionImportHandler.getLogger().debug( "Skipping the exporting of schedule owner's username [ " + scheduleOwnerUsername + " ]" );
+            }
+            try {
+              ITenant tenant = new Tenant( "/pentaho/" + TenantUtils.getDefaultTenant(), true );
+              ITenantManager tenantManager = PentahoSystem.get( ITenantManager.class );
+              if ( tenantManager != null ) {
+                tenantManager.createUserHomeFolder( tenant, scheduleOwnerUsername );
+                if ( solutionImportHandler.isPerformingRestore() ) {
+                  solutionImportHandler.getLogger().debug( "Verified/created home folder for existing user [ " + scheduleOwnerUsername + " ]" );
+                }
+              }
+            } catch ( Exception e ) {
+              // Don't fail if home folder creation has issues
+              if ( solutionImportHandler.isPerformingRestore() ) {
+                solutionImportHandler.getLogger().debug( "Could not verify home folder for existing user [ " + scheduleOwnerUsername + " ]: " + e.getMessage() );
+              }
+            }
+          }
+        }
+
+        // PHASE 1.5: Import schedule dependencies from backup FIRST
         String inputFilePath = jobScheduleRequest.getInputFile();
         if ( inputFilePath != null && !inputFilePath.trim().isEmpty() ) {
           // Normalize path using full URL decoding (handles + to space, %2B to +, etc.)
@@ -123,14 +152,6 @@ public class ScheduleImportUtil implements IImportHelper {
               continue; // Skip this schedule, the file couldn't be imported
             }
           }
-        }
-
-        // PHASE 1.5: Import the schedule owner user if needed
-        // This creates the user account and home folder before schedule creation
-        String scheduleOwnerUsername = extractScheduleOwnerUsername( jobScheduleRequest );
-        if ( scheduleOwnerUsername != null && !scheduleOwnerUsername.trim().isEmpty() ) {
-          ExportManifest manifest = solutionImportHandler.getImportSession().getManifest();
-          solutionImportHandler.importScheduleOwnerUser( scheduleOwnerUsername, manifest );
         }
 
         // PHASE 2: Now that file is guaranteed to exist, proceed with schedule import

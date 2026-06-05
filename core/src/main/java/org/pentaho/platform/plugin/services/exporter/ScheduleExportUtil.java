@@ -14,6 +14,7 @@
 package org.pentaho.platform.plugin.services.exporter;
 
 import org.apache.commons.lang.ArrayUtils;
+import org.pentaho.platform.api.engine.ISystemConfig;
 import org.pentaho.platform.api.scheduler2.ComplexJobTrigger;
 import org.pentaho.platform.api.scheduler2.CronJobTrigger;
 import org.pentaho.platform.api.scheduler2.IBlockoutManager;
@@ -29,6 +30,7 @@ import org.pentaho.platform.api.repository2.unified.RepositoryFile;
 import org.pentaho.platform.api.repository2.unified.RepositoryFileAcl;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.api.importexport.ExportException;
+import org.pentaho.platform.plugin.services.importexport.ComponentConfig;
 import org.pentaho.platform.plugin.services.importexport.exportManifest.ExportManifest;
 import org.pentaho.platform.scheduler2.messsages.Messages;
 import org.pentaho.platform.repository.RepositoryFilenameUtils;
@@ -54,7 +56,14 @@ public class ScheduleExportUtil implements IExportHelper {
     // to get 100% coverage
   }
 
-  public void registerAsHelper() {
+  public boolean shouldExecute( Object config ) {
+    if ( config instanceof ComponentConfig ) {
+      return ( ( ComponentConfig ) config ).isIncludeSchedules();
+    }
+    return false;
+  }
+
+   public void registerAsHelper() {
     PentahoSystem.get( IPentahoPlatformExporter.class, "IPentahoPlatformExporter", null ).addExportHelper( this );
   }
 
@@ -345,6 +354,13 @@ public class ScheduleExportUtil implements IExportHelper {
       if ( scheduler == null ) {
         throw new ExportException( " Unable to retrieve scheduler service. Failed to export schedules" );
       }
+      // Read property from system/security.properties
+      ISystemConfig config = PentahoSystem.get( ISystemConfig.class );
+      String provider = "jackrabbit";
+      if ( config != null ) {
+        provider = config.getProperty( "security.provider", "jackrabbit" );
+      }
+
       List<Job> jobs = (List<Job>) (List<?>) scheduler.getJobs( null );
       if ( jobs != null ) {
         jobListSize = jobs.size();
@@ -369,15 +385,18 @@ public class ScheduleExportUtil implements IExportHelper {
             log.info( "Skipping schedule [ " + job.getJobName() + " ] - does not meet export criteria (invalid end date or repeat interval)" );
             continue;
           }
-          
-          // Export the schedule owner user and their roles
+
           String jobOwner = job.getUserName();
-          if ( jobOwner != null && !jobOwner.trim().isEmpty() ) {
-            log.debug( "Exporting schedule owner user [ " + jobOwner + " ] for schedule [ " + job.getJobName() + " ]" );
-            // Call platform's exportUserAndRole method for this schedule owner
-            exporter.exportUserAndRole( jobOwner );
+          if ( provider.equalsIgnoreCase( "jackrabbit" ) ) {
+            // Export the schedule owner user and their roles
+            if ( jobOwner != null && !jobOwner.trim().isEmpty() ) {
+              log.debug( "Exporting schedule owner user [ " + jobOwner + " ] for schedule [ " + job.getJobName() + " ]" );
+              // Call platform's exportUserAndRole method for this schedule owner
+              exporter.exportUserAndRole( jobOwner );
+            }
+          } else {
+            log.debug( "Skipping the exporting of schedule owner's username" );
           }
-          
           // EXPORT DEPENDENCIES: Export the schedule's referenced input file to the bundle
           String inputFilePath = scheduleRequest.getInputFile();
           if ( inputFilePath != null && !inputFilePath.trim().isEmpty() ) {
@@ -464,7 +483,11 @@ public class ScheduleExportUtil implements IExportHelper {
     exportManifest = exporter.getExportManifest();
     setRepositoryExportLogger( exporter.getRepositoryExportLogger() );
     setExporter( exporter );
-    
+
+    Object config = exporter.getComponentConfig();
+    if ( !shouldExecute( config ) ) {
+      return;
+    }
     // Export schedules - users/roles are exported directly as schedules are processed
     exportSchedules();
   }
